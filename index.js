@@ -1,136 +1,181 @@
-const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
+require("dotenv").config();
+const TelegramBot = require("node-telegram-bot-api");
+const sqlite3 = require("sqlite3").verbose();
+const express = require("express");
 
-// 🔑 Token（Render 用環境變數）
-const token = process.env.TOKEN;
+// ====== TOKEN ======
+const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// 👉 初始化 Bot
-const bot = new TelegramBot(token, { polling: true });
+// ====== Web Server（Render用）======
+const app = express();
+app.get("/", (req, res) => res.send("BOT RUNNING"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("🌐 Web server running on " + PORT));
 
-console.log('✅ BOT 已啟動');
+// ====== DB ======
+const db = new sqlite3.Database("./data.db");
 
-// 👉 資料群（你指定的）
+db.run(`
+CREATE TABLE IF NOT EXISTS messages (
+  chat_id TEXT,
+  message_id TEXT,
+  text TEXT,
+  date INTEGER
+)
+`);
+
+// ====== 群設定 ======
 const sourceGroups = [
-  -1003825428908, // 資料群
-  -1003877293059  // 資料群
+  -1003825428908,
+  -1003877293059,
 ];
 
-// 👉 查詢群
 const queryGroups = [
   -1003874245157
 ];
 
-// 👉 JSON 檔
-const DATA_FILE = './data.json';
+// ====== 分類關鍵字 ======
+const categories = {
+  帳號: ["帳號", "登入", "密碼"],
+  儲值: ["儲值", "入金", "充值"],
+  提領: ["提款", "出金"],
+  遊戲: ["遊戲", "注單", "輸贏"],
+  代理: ["代理", "推廣"],
+};
 
-// 👉 讀資料
-function loadData() {
-  if (!fs.existsSync(DATA_FILE)) return [];
-  return JSON.parse(fs.readFileSync(DATA_FILE));
-}
-
-// 👉 存資料
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-// =========================
-// 📥 存資料（只存資料群）
-// =========================
-bot.on('message', (msg) => {
-  const chatId = msg.chat.id;
-
-  if (!sourceGroups.includes(chatId)) return;
-
-  const text = msg.text || msg.caption || '';
+// ====== 存資料 ======
+function saveMessage(msg) {
+  const text = msg.text || msg.caption || "";
   if (!text) return;
 
-  let data = loadData();
-
-  // ❌ 過濾已刪除
-  if (text.includes('已刪除') || text.includes('刪除')) return;
-
-  // ❌ 避免重複
-  if (data.some(d => d.message_id === msg.message_id)) return;
-
-  data.push({
-    chat_id: msg.chat.id,
-    message_id: msg.message_id,
-    text: text,
-    date: msg.date
-  });
-
-  saveData(data);
-});
-
-// =========================
-// 🔍 查詢
-// =========================
-bot.on('message', (msg) => {
-  const chatId = msg.chat.id;
-
-  if (!queryGroups.includes(chatId)) return;
-
-  const keyword = (msg.text || '').trim();
-  if (!keyword) return;
-
-  let data = loadData();
-
-  // 🔍 模糊搜尋
-  let results = data.filter(d =>
-    d.text.toLowerCase().includes(keyword.toLowerCase())
+  db.run(
+    `INSERT INTO messages (chat_id, message_id, text, date) VALUES (?, ?, ?, ?)`,
+    [msg.chat.id, msg.message_id, text, msg.date]
   );
+}
 
-  // ❌ 過濾已刪除
-  results = results.filter(d =>
-    !d.text.includes('已刪除') &&
-    !d.text.includes('刪除')
+// ====== 刪除資料 ======
+function deleteMessage(chatId, messageId) {
+  db.run(
+    `DELETE FROM messages WHERE chat_id = ? AND message_id = ?`,
+    [chatId, messageId]
   );
+}
 
-  // ❌ 過濾優惠（你剛剛問題🔥）
-  if (!keyword.includes('優惠')) {
-    results = results.filter(d =>
-      !d.text.includes('優惠')
-    );
-  }
-
-  // ❌ 去重複（關鍵🔥）
-  const unique = [];
-  const seen = new Set();
-
-  for (let item of results) {
-    if (!seen.has(item.text)) {
-      seen.add(item.text);
-      unique.push(item);
+// ====== 抓分類 ======
+function getCategory(text) {
+  for (let key in categories) {
+    if (categories[key].some(k => text.includes(k))) {
+      return key;
     }
   }
+  return null;
+}
 
-  // 👉 沒資料
-  if (unique.length === 0) {
-    bot.sendMessage(chatId, '❌ 查無相關資料');
+// ====== 查詢 ======
+function search(keyword, category, callback) {
+  db.all(`SELECT * FROM messages`, [], (err, rows) => {
+    if (err) return callback([]);
+
+    let filtered = rows.filter(r => {
+      if (!r.text) return false;
+
+      // 必須包含關鍵字
+      if (!r.text.includes(keyword)) return false;
+
+      // 如果有分類 → 必須符合分類
+      if (category) {
+        return categories[category].some(k => r.text.includes(k));
+      }
+
+      return true;
+    });
+
+    // 去重
+    let unique = [];
+    let seen = new Set();
+
+    for (let r of filtered) {
+      if (!seen.has(r.text)) {
+        seen.add(r.text);
+        unique.push(r.text);
+      }
+    }
+
+    callback(unique.slice(0, 5));
+  });
+}
+
+// ====== 收資料 ======
+bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
+
+  if (sourceGroups.includes(chatId)) {
+    saveMessage(msg);
+  }
+});
+
+// ====== 刪除同步 ======
+bot.on("deleted_message", (msg) => {
+  deleteMessage(msg.chat.id, msg.message_id);
+});
+
+// ====== 查詢入口 ======
+bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  if (!queryGroups.includes(chatId)) return;
+  if (!text) return;
+
+  // 管理指令
+  if (text === "/stats") {
+    db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
+      bot.sendMessage(chatId, `📊 目前資料數量：${row.count}`);
+    });
     return;
   }
 
-  // 👉 限制數量
-  const top = unique.slice(0, 5);
+  if (text === "/clear") {
+    db.run(`DELETE FROM messages`);
+    bot.sendMessage(chatId, "🧹 已清空資料庫");
+    return;
+  }
 
-  let reply = `🔍 找到 ${top.length} 筆相關：\n\n`;
+  // 👉 先給分類選單
+  let buttons = Object.keys(categories).map(c => ([{ text: c }]));
 
-  top.forEach((item, i) => {
-    reply += `${i + 1}. ${item.text}\n\n`;
+  bot.sendMessage(chatId, "🔍 請選擇查詢分類：", {
+    reply_markup: {
+      keyboard: buttons,
+      one_time_keyboard: true,
+      resize_keyboard: true
+    }
   });
 
-  bot.sendMessage(chatId, reply);
+  // 等使用者選分類
+  bot.once("message", (msg2) => {
+    const category = msg2.text;
+
+    if (!categories[category]) {
+      bot.sendMessage(chatId, "❌ 分類錯誤");
+      return;
+    }
+
+    search(text, category, (results) => {
+      if (results.length === 0) {
+        bot.sendMessage(chatId, "❌ 找不到資料");
+        return;
+      }
+
+      let reply = "📌 查詢結果：\n\n";
+      results.forEach((r, i) => {
+        reply += `${i + 1}. ${r}\n\n`;
+      });
+
+      bot.sendMessage(chatId, reply);
+    });
+  });
 });
 
-const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send('Bot is running');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('🌐 Web server running');
-});
+console.log("✅ BOT 已啟動");
