@@ -5,7 +5,7 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== WEB =====
+// ===== Web (Render用) =====
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 app.listen(process.env.PORT || 3000);
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
-// ===== 群 =====
+// ===== 群設定 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -48,51 +48,71 @@ bot.on("message", (msg) => {
 // ===== 查詢 =====
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const keyword = msg.text;
 
   if (!queryGroups.includes(chatId)) return;
-  if (!text) return;
+  if (!keyword) return;
 
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return;
 
-    let keyword = text.toLowerCase();
+    let matches = [];
 
-    let results = rows.filter(r =>
-      r.text && r.text.toLowerCase().includes(keyword)
-    );
+    rows.forEach(r => {
+      if (!r.text) return;
 
-    if (results.length === 0) {
-      bot.sendMessage(chatId, "❌ 找不到資料");
+      // 👉 每一行拆開
+      let lines = r.text.split("\n");
+
+      lines.forEach(line => {
+        if (line.toLowerCase().includes(keyword.toLowerCase())) {
+          matches.push({
+            title: line.trim(),
+            chat_id: r.chat_id,
+            message_id: r.message_id
+          });
+        }
+      });
+    });
+
+    if (matches.length === 0) {
+      bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
-    // 👉 組清單
-    let list = "📌 查詢結果\n\n";
+    // 去重（避免重複）
+    let unique = [];
+    let map = new Set();
 
+    matches.forEach(m => {
+      if (!map.has(m.title)) {
+        map.add(m.title);
+        unique.push(m);
+      }
+    });
+
+    // 👉 顯示清單
+    let text = "📌 查詢結果：\n\n";
     let buttons = [];
 
-    results.slice(0, 10).forEach((r, i) => {
-      let title = r.text.split("\n")[0];
-
-      list += `${i + 1}. ${title}\n`;
+    unique.slice(0, 10).forEach((m, i) => {
+      text += `${i + 1}. ${m.title}\n`;
 
       buttons.push([{
-        text: title,
-        callback_data: `${r.chat_id}|${r.message_id}`
+        text: m.title,
+        callback_data: `${m.chat_id}|${m.message_id}`
       }]);
     });
 
-    bot.sendMessage(chatId, list, {
+    bot.sendMessage(chatId, text, {
       reply_markup: {
         inline_keyboard: buttons
       }
     });
-
   });
 });
 
-// ===== 點擊回原文 =====
+// ===== 點擊 → 回原文 =====
 bot.on("callback_query", (query) => {
   const chatId = query.message.chat.id;
   const [sourceChatId, messageId] = query.data.split("|");
@@ -106,4 +126,4 @@ bot.on("callback_query", (query) => {
   bot.answerCallbackQuery(query.id);
 });
 
-console.log("🔥 客服模式（點擊回原文）已啟動");
+console.log("🔥 最終客服系統 已啟動");
