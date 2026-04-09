@@ -5,11 +5,11 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Render Web =====
+// ===== Web =====
 const app = express();
-app.get("/", (req, res) => res.send("BOT RUNNING"));
+app.get("/", (req, res) => res.send("OK"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🌐 Web server running"));
+app.listen(PORT);
 
 // ===== DB =====
 const db = new sqlite3.Database("./data.db");
@@ -27,16 +27,10 @@ CREATE TABLE IF NOT EXISTS messages (
 `);
 
 // ===== 群 =====
-const sourceGroups = [
-  -1003825428908,
-  -1003877293059,
-];
+const sourceGroups = [-1003825428908, -1003877293059];
+const queryGroups = [-1003874245157];
 
-const queryGroups = [
-  -1003874245157
-];
-
-// ===== 存資料（含連結）=====
+// ===== 存資料 =====
 function saveMessage(msg) {
   const text = msg.text || msg.caption || "";
   if (!text && !msg.photo) return;
@@ -58,49 +52,28 @@ function saveMessage(msg) {
   );
 }
 
-// ===== 刪除同步 =====
+// ===== 刪除 =====
 function deleteMessage(chatId, messageId) {
-  db.run(
-    `DELETE FROM messages WHERE chat_id = ? AND message_id = ?`,
-    [chatId, messageId]
-  );
+  db.run(`DELETE FROM messages WHERE chat_id=? AND message_id=?`, [chatId, messageId]);
 }
 
-// ===== 還原連結（核心🔥）=====
-function rebuildTextWithLinks(text, entitiesStr) {
-  if (!entitiesStr) return text;
+// ===== 抽連結 =====
+function extractUrl(text, entitiesStr) {
+  if (!entitiesStr) return null;
 
   try {
     const entities = JSON.parse(entitiesStr);
-    let result = "";
-    let lastIndex = 0;
 
-    entities.forEach(e => {
-      const start = e.offset;
-      const end = e.offset + e.length;
+    for (let e of entities) {
+      if (e.type === "text_link") return e.url;
+      if (e.type === "url") return text.substring(e.offset, e.offset + e.length);
+    }
+  } catch {}
 
-      result += text.substring(lastIndex, start);
-      const part = text.substring(start, end);
-
-      if (e.type === "text_link") {
-        result += `<a href="${e.url}">${part}</a>`;
-      } else if (e.type === "url") {
-        result += `<a href="${part}">${part}</a>`;
-      } else {
-        result += part;
-      }
-
-      lastIndex = end;
-    });
-
-    result += text.substring(lastIndex);
-    return result;
-  } catch {
-    return text;
-  }
+  return null;
 }
 
-// ===== 智慧搜尋 =====
+// ===== 搜尋 =====
 function smartSearch(keyword, callback) {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return callback([]);
@@ -124,6 +97,7 @@ function smartSearch(keyword, callback) {
     .filter(r => r && r.score > 0)
     .sort((a, b) => b.score - a.score);
 
+    // 去重
     let unique = [];
     let seen = new Set();
 
@@ -159,37 +133,51 @@ bot.on("message", (msg) => {
   if (!queryGroups.includes(chatId)) return;
   if (!text) return;
 
-  if (text === "/stats") {
-    db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
-      bot.sendMessage(chatId, `📊 資料數：${row.count}`);
-    });
-    return;
-  }
-
   if (text === "/clear") {
     db.run(`DELETE FROM messages`);
-    bot.sendMessage(chatId, "🧹 已清空資料");
+    bot.sendMessage(chatId, "🧹 已清空");
     return;
   }
 
   smartSearch(text, (results) => {
     if (results.length === 0) {
-      bot.sendMessage(chatId, "❌ 找不到相關資料");
+      bot.sendMessage(chatId, "❌ 找不到資料");
       return;
     }
 
-    let reply = "🔍 找到相關內容：\n\n";
+    bot.sendMessage(chatId, "📌 查詢結果\n");
 
-    results.forEach((r, i) => {
-      const formatted = rebuildTextWithLinks(r.text, r.entities);
-      reply += `${i + 1}. ${formatted}\n\n`;
+    results.forEach((r) => {
+      const url = extractUrl(r.text, r.entities);
+
+      let title = r.text.split("\n")[0] || "內容";
+      let desc = r.text.split("\n").slice(1).join("\n") || "";
+
+      let card =
+`━━━━━━━━━━━━
+💳 ${title}
+👉 ${desc}
+`;
+
+      // 有圖片
+      if (r.type === "photo" && r.file_id) {
+        bot.sendPhoto(chatId, r.file_id, {
+          caption: card,
+          reply_markup: url ? {
+            inline_keyboard: [[{ text: "🔗 查看詳情", url }]]
+          } : undefined
+        });
+      } else {
+        bot.sendMessage(chatId, card, {
+          reply_markup: url ? {
+            inline_keyboard: [[{ text: "🔗 查看詳情", url }]]
+          } : undefined
+        });
+      }
+
     });
 
-    bot.sendMessage(chatId, reply, {
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
   });
 });
 
-console.log("🔥 商用級 BOT 已啟動");
+console.log("🔥 客服卡片 UI 已啟動");
