@@ -5,7 +5,7 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Web (Render用) =====
+// ===== Web（Render）=====
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 app.listen(process.env.PORT || 3000);
@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
+// ===== 群組 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -29,6 +30,10 @@ const sourceGroups = [
 const queryGroups = [
   -1003874245157
 ];
+
+// ===== 記錄「最近查詢結果」=====
+const userState = {}; 
+// userState[chatId] = [ {keyword, chat_id, message_id} ]
 
 // =========================
 // 📥 收資料（來源群）
@@ -51,73 +56,75 @@ bot.on("message", (msg) => {
 // =========================
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
-  const keyword = msg.text;
+  const text = msg.text;
 
   if (!queryGroups.includes(chatId)) return;
-  if (!keyword) return;
+  if (!text) return;
 
+  // ===== 如果是選項（1 / 2 / 關鍵字）=====
+  if (userState[chatId]) {
+    const list = userState[chatId];
+
+    let target = null;
+
+    // 👉 打「1」
+    if (/^\d+$/.test(text)) {
+      target = list[Number(text) - 1];
+    } else {
+      // 👉 模糊比對
+      target = list.find(item => item.keyword.includes(text));
+    }
+
+    if (target) {
+      bot.forwardMessage(
+        chatId,
+        target.chat_id,
+        target.message_id
+      );
+      return;
+    }
+  }
+
+  // ===== 一般查詢 =====
   db.get(
     `SELECT * FROM messages WHERE text LIKE ? LIMIT 1`,
-    [`%${keyword}%`],
+    [`%${text}%`],
     (err, row) => {
       if (err || !row) {
         bot.sendMessage(chatId, "❌ 找不到相關資料");
         return;
       }
 
-      // 👉 抓清單（1. 2. 3.）
+      // ✅ 先丟原文（完整保留超連結）
+      bot.forwardMessage(chatId, row.chat_id, row.message_id);
+
+      // ===== 拆出 1. 2. 3. =====
       const lines = row.text
         .split("\n")
         .filter(l => /^\d+\./.test(l));
 
-      // 👉 建立按鈕（長得像清單）
-      const keyboard = lines.map((line) => [{
-        text: line,
-        callback_data: JSON.stringify({
+      const list = [];
+
+      // ===== 建立「子項索引」=====
+      lines.forEach(line => {
+        const keyword = line.replace(/^\d+\.\s*/, "");
+
+        list.push({
+          keyword,
           chat_id: row.chat_id,
-          message_id: row.message_id,
-          keyword: line.replace(/^\d+\.\s*/, "")
-        })
-      }]);
-
-      // 👉 先顯示原文（完整）
-      bot.sendMessage(chatId, row.text);
-
-      // 👉 再給可點選清單（像你畫面）
-      bot.sendMessage(chatId, "👇 點選項目查看內容", {
-        reply_markup: {
-          inline_keyboard: keyboard
-        }
+          message_id: row.message_id
+        });
       });
+
+      // 👉 存起來（給下一步用）
+      userState[chatId] = list;
+
+      // 👉 提示（不用按鈕）
+      bot.sendMessage(chatId,
+        "👉 請輸入編號或關鍵字查詢（例：1 / VISA / 台灣）"
+      );
     }
   );
 });
 
-// =========================
-// 🎯 點擊 → 回傳該項內容
-// =========================
-bot.on("callback_query", (query) => {
-  const data = JSON.parse(query.data);
-  const chatId = query.message.chat.id;
-
-  // 👉 找最符合該項的內容
-  db.get(
-    `SELECT * FROM messages WHERE text LIKE ? LIMIT 1`,
-    [`%${data.keyword}%`],
-    (err, row) => {
-      if (row) {
-        bot.forwardMessage(
-          chatId,
-          row.chat_id,
-          row.message_id
-        );
-      } else {
-        bot.sendMessage(chatId, "❌ 找不到該項內容");
-      }
-    }
-  );
-
-  bot.answerCallbackQuery(query.id);
-});
-
-console.log("🔥 客服系統（進階版）已啟動");
+console.log("🔥 最終客服系統已啟動");
