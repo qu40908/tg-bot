@@ -5,11 +5,11 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Web =====
+// ===== Render Web =====
 const app = express();
-app.get("/", (req, res) => res.send("OK"));
+app.get("/", (req, res) => res.send("BOT RUNNING"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT);
+app.listen(PORT, () => console.log("🌐 Web server running"));
 
 // ===== DB =====
 const db = new sqlite3.Database("./data.db");
@@ -27,10 +27,16 @@ CREATE TABLE IF NOT EXISTS messages (
 `);
 
 // ===== 群 =====
-const sourceGroups = [-1003825428908, -1003877293059];
-const queryGroups = [-1003874245157];
+const sourceGroups = [
+  -1003825428908,
+  -1003877293059,
+];
 
-// ===== 存資料 =====
+const queryGroups = [
+  -1003874245157
+];
+
+// ===== 存資料（含連結）=====
 function saveMessage(msg) {
   const text = msg.text || msg.caption || "";
   if (!text && !msg.photo) return;
@@ -54,22 +60,47 @@ function saveMessage(msg) {
 
 // ===== 刪除同步 =====
 function deleteMessage(chatId, messageId) {
-  db.run(`DELETE FROM messages WHERE chat_id=? AND message_id=?`, [chatId, messageId]);
+  db.run(
+    `DELETE FROM messages WHERE chat_id = ? AND message_id = ?`,
+    [chatId, messageId]
+  );
 }
 
-// ===== 抽出連結 =====
-function extractUrl(text, entities) {
+// ===== 還原連結（核心🔥）=====
+function rebuildTextWithLinks(text, entitiesStr) {
+  if (!entitiesStr) return text;
+
   try {
-    const parsed = JSON.parse(entities || "[]");
-    for (let e of parsed) {
-      if (e.type === "text_link") return e.url;
-      if (e.type === "url") return text.substring(e.offset, e.offset + e.length);
-    }
-  } catch {}
-  return null;
+    const entities = JSON.parse(entitiesStr);
+    let result = "";
+    let lastIndex = 0;
+
+    entities.forEach(e => {
+      const start = e.offset;
+      const end = e.offset + e.length;
+
+      result += text.substring(lastIndex, start);
+      const part = text.substring(start, end);
+
+      if (e.type === "text_link") {
+        result += `<a href="${e.url}">${part}</a>`;
+      } else if (e.type === "url") {
+        result += `<a href="${part}">${part}</a>`;
+      } else {
+        result += part;
+      }
+
+      lastIndex = end;
+    });
+
+    result += text.substring(lastIndex);
+    return result;
+  } catch {
+    return text;
+  }
 }
 
-// ===== 搜尋 =====
+// ===== 智慧搜尋 =====
 function smartSearch(keyword, callback) {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return callback([]);
@@ -93,7 +124,18 @@ function smartSearch(keyword, callback) {
     .filter(r => r && r.score > 0)
     .sort((a, b) => b.score - a.score);
 
-    callback(scored.slice(0, 5));
+    let unique = [];
+    let seen = new Set();
+
+    for (let r of scored) {
+      let key = r.text + (r.file_id || "");
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(r);
+      }
+    }
+
+    callback(unique.slice(0, 5));
   });
 }
 
@@ -104,7 +146,7 @@ bot.on("message", (msg) => {
   }
 });
 
-// ===== 刪除 =====
+// ===== 刪除同步 =====
 bot.on("deleted_message", (msg) => {
   deleteMessage(msg.chat.id, msg.message_id);
 });
@@ -117,37 +159,37 @@ bot.on("message", (msg) => {
   if (!queryGroups.includes(chatId)) return;
   if (!text) return;
 
+  if (text === "/stats") {
+    db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
+      bot.sendMessage(chatId, `📊 資料數：${row.count}`);
+    });
+    return;
+  }
+
   if (text === "/clear") {
     db.run(`DELETE FROM messages`);
-    bot.sendMessage(chatId, "🧹 清空完成");
+    bot.sendMessage(chatId, "🧹 已清空資料");
     return;
   }
 
   smartSearch(text, (results) => {
     if (results.length === 0) {
-      bot.sendMessage(chatId, "❌ 找不到");
+      bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
-    let buttons = [];
     let reply = "🔍 找到相關內容：\n\n";
 
     results.forEach((r, i) => {
-      const url = extractUrl(r.text, r.entities);
-
-      reply += `${i + 1}. ${r.text}\n\n`;
-
-      if (url) {
-        buttons.push([{ text: `🔗 查看 ${i + 1}`, url }]);
-      }
+      const formatted = rebuildTextWithLinks(r.text, r.entities);
+      reply += `${i + 1}. ${formatted}\n\n`;
     });
 
     bot.sendMessage(chatId, reply, {
-      reply_markup: {
-        inline_keyboard: buttons
-      }
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     });
   });
 });
 
-console.log("🔥 客服級 BOT 啟動");
+console.log("🔥 商用級 BOT 已啟動");
