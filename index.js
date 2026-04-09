@@ -41,10 +41,7 @@ function saveMessage(msg) {
     [`%${norm}%`],
     (err, row) => {
       if (!row) {
-        db.run(
-          'INSERT INTO messages (chat_id, message_id, text, date) VALUES (?, ?, ?, ?)',
-          [msg.chat.id, msg.message_id, text, msg.date]
-        );
+        db.save(msg.chat.id, msg.message_id, text, msg.date);
       }
     }
   );
@@ -149,10 +146,7 @@ bot.on('callback_query', (query) => {
 
   bot.copyMessage(chatId, item.chat_id, item.message_id)
     .catch(() => {
-      db.run(
-        'DELETE FROM messages WHERE chat_id = ? AND message_id = ?',
-        [item.chat_id, item.message_id]
-      );
+      db.remove(item.chat_id, item.message_id);
       bot.sendMessage(chatId, '⚠️ 已刪除資料（自動清理）');
     });
 
