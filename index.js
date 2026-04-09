@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
-// ===== 群設定 =====
+// ===== 群 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -45,7 +45,7 @@ bot.on("message", (msg) => {
   );
 });
 
-// ===== 查詢 =====
+// ===== 查詢 + 顯示整段 =====
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
   const keyword = msg.text;
@@ -56,74 +56,53 @@ bot.on("message", (msg) => {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return;
 
-    let matches = [];
+    let found = rows.find(r =>
+      r.text && r.text.toLowerCase().includes(keyword.toLowerCase())
+    );
 
-    rows.forEach(r => {
-      if (!r.text) return;
-
-      // 👉 每一行拆開
-      let lines = r.text.split("\n");
-
-      lines.forEach(line => {
-        if (line.toLowerCase().includes(keyword.toLowerCase())) {
-          matches.push({
-            title: line.trim(),
-            chat_id: r.chat_id,
-            message_id: r.message_id
-          });
-        }
-      });
-    });
-
-    if (matches.length === 0) {
+    if (!found) {
       bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
-    // 去重（避免重複）
-    let unique = [];
-    let map = new Set();
-
-    matches.forEach(m => {
-      if (!map.has(m.title)) {
-        map.add(m.title);
-        unique.push(m);
-      }
-    });
-
-    // 👉 顯示清單
-    let text = "📌 查詢結果：\n\n";
-    let buttons = [];
-
-    unique.slice(0, 10).forEach((m, i) => {
-      text += `${i + 1}. ${m.title}\n`;
-
-      buttons.push([{
-        text: m.title,
-        callback_data: `${m.chat_id}|${m.message_id}`
-      }]);
-    });
-
-    bot.sendMessage(chatId, text, {
-      reply_markup: {
-        inline_keyboard: buttons
-      }
-    });
+    // 👉 直接顯示整段（像你圖二）
+    bot.sendMessage(chatId, found.text);
   });
 });
 
-// ===== 點擊 → 回原文 =====
-bot.on("callback_query", (query) => {
-  const chatId = query.message.chat.id;
-  const [sourceChatId, messageId] = query.data.split("|");
+// ===== 回覆某一行 → 回原文 =====
+bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
 
-  bot.forwardMessage(
-    chatId,
-    sourceChatId,
-    messageId
-  );
+  if (!queryGroups.includes(chatId)) return;
+  if (!text) return;
 
-  bot.answerCallbackQuery(query.id);
+  db.all(`SELECT * FROM messages`, [], (err, rows) => {
+    if (err) return;
+
+    let match = null;
+
+    rows.forEach(r => {
+      if (!r.text) return;
+
+      let lines = r.text.split("\n");
+
+      lines.forEach(line => {
+        if (line.includes(text)) {
+          match = r;
+        }
+      });
+    });
+
+    if (match) {
+      bot.forwardMessage(
+        chatId,
+        match.chat_id,
+        match.message_id
+      );
+    }
+  });
 });
 
-console.log("🔥 最終客服系統 已啟動");
+console.log("🔥 最終版（回覆觸發）已啟動");
