@@ -3,14 +3,13 @@ const TelegramBot = require("node-telegram-bot-api");
 const sqlite3 = require("sqlite3").verbose();
 const express = require("express");
 
-// ===== BOT =====
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Web（Render用）=====
+// ===== Web =====
 const app = express();
-app.get("/", (req, res) => res.send("BOT RUNNING"));
+app.get("/", (req, res) => res.send("OK"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🌐 Web server running"));
+app.listen(PORT);
 
 // ===== DB =====
 const db = new sqlite3.Database("./data.db");
@@ -27,17 +26,11 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
-// ===== 群設定 =====
-const sourceGroups = [
-  -1003825428908,
-  -1003877293059,
-];
+// ===== 群 =====
+const sourceGroups = [-1003825428908, -1003877293059];
+const queryGroups = [-1003874245157];
 
-const queryGroups = [
-  -1003874245157
-];
-
-// ===== 存資料（含連結）=====
+// ===== 存資料 =====
 function saveMessage(msg) {
   const text = msg.text || msg.caption || "";
   if (!text && !msg.photo) return;
@@ -61,13 +54,22 @@ function saveMessage(msg) {
 
 // ===== 刪除同步 =====
 function deleteMessage(chatId, messageId) {
-  db.run(
-    `DELETE FROM messages WHERE chat_id = ? AND message_id = ?`,
-    [chatId, messageId]
-  );
+  db.run(`DELETE FROM messages WHERE chat_id=? AND message_id=?`, [chatId, messageId]);
 }
 
-// ===== 智慧模糊搜尋（升級版）=====
+// ===== 抽出連結 =====
+function extractUrl(text, entities) {
+  try {
+    const parsed = JSON.parse(entities || "[]");
+    for (let e of parsed) {
+      if (e.type === "text_link") return e.url;
+      if (e.type === "url") return text.substring(e.offset, e.offset + e.length);
+    }
+  } catch {}
+  return null;
+}
+
+// ===== 搜尋 =====
 function smartSearch(keyword, callback) {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return callback([]);
@@ -78,13 +80,10 @@ function smartSearch(keyword, callback) {
       if (!r.text) return null;
 
       let text = r.text.toLowerCase();
-
       let score = 0;
 
-      // 強命中
       if (text.includes(keyword)) score += 10;
 
-      // 關鍵字拆分
       keyword.split("").forEach(k => {
         if (text.includes(k)) score += 1;
       });
@@ -94,19 +93,7 @@ function smartSearch(keyword, callback) {
     .filter(r => r && r.score > 0)
     .sort((a, b) => b.score - a.score);
 
-    // 去重（文字+圖片）
-    let unique = [];
-    let seen = new Set();
-
-    for (let r of scored) {
-      let key = r.text + (r.file_id || "");
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(r);
-      }
-    }
-
-    callback(unique.slice(0, 5));
+    callback(scored.slice(0, 5));
   });
 }
 
@@ -117,7 +104,7 @@ bot.on("message", (msg) => {
   }
 });
 
-// ===== 刪除同步 =====
+// ===== 刪除 =====
 bot.on("deleted_message", (msg) => {
   deleteMessage(msg.chat.id, msg.message_id);
 });
@@ -130,46 +117,37 @@ bot.on("message", (msg) => {
   if (!queryGroups.includes(chatId)) return;
   if (!text) return;
 
-  // 管理
-  if (text === "/stats") {
-    db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
-      bot.sendMessage(chatId, `📊 資料數：${row.count}`);
-    });
-    return;
-  }
-
   if (text === "/clear") {
     db.run(`DELETE FROM messages`);
-    bot.sendMessage(chatId, "🧹 已清空資料");
+    bot.sendMessage(chatId, "🧹 清空完成");
     return;
   }
 
-  // 查詢
   smartSearch(text, (results) => {
     if (results.length === 0) {
-      bot.sendMessage(chatId, "❌ 找不到相關資料");
+      bot.sendMessage(chatId, "❌ 找不到");
       return;
     }
 
-    results.forEach(r => {
-      const entities = r.entities ? JSON.parse(r.entities) : [];
+    let buttons = [];
+    let reply = "🔍 找到相關內容：\n\n";
 
-      // 📷 圖片
-      if (r.type === "photo" && r.file_id) {
-        bot.sendPhoto(chatId, r.file_id, {
-          caption: r.text || "",
-          caption_entities: entities
-        });
-      } 
-      // 📝 文字（含連結）
-      else {
-        bot.sendMessage(chatId, r.text, {
-          entities: entities
-        });
+    results.forEach((r, i) => {
+      const url = extractUrl(r.text, r.entities);
+
+      reply += `${i + 1}. ${r.text}\n\n`;
+
+      if (url) {
+        buttons.push([{ text: `🔗 查看 ${i + 1}`, url }]);
       }
     });
 
+    bot.sendMessage(chatId, reply, {
+      reply_markup: {
+        inline_keyboard: buttons
+      }
+    });
   });
 });
 
-console.log("✅ BOT 已啟動");
+console.log("🔥 客服級 BOT 啟動");
