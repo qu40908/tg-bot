@@ -3,16 +3,16 @@ const TelegramBot = require("node-telegram-bot-api");
 const sqlite3 = require("sqlite3").verbose();
 const express = require("express");
 
-// ====== TOKEN ======
+// ===== BOT =====
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ====== Web Server（Render用）======
+// ===== Render Web =====
 const app = express();
 app.get("/", (req, res) => res.send("BOT RUNNING"));
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🌐 Web server running on " + PORT));
+app.listen(PORT, () => console.log("🌐 Web server running"));
 
-// ====== DB ======
+// ===== DB =====
 const db = new sqlite3.Database("./data.db");
 
 db.run(`
@@ -20,11 +20,13 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id TEXT,
   message_id TEXT,
   text TEXT,
+  file_id TEXT,
+  type TEXT,
   date INTEGER
 )
 `);
 
-// ====== 群設定 ======
+// ===== 群 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -34,27 +36,25 @@ const queryGroups = [
   -1003874245157
 ];
 
-// ====== 分類關鍵字 ======
-const categories = {
-  帳號: ["帳號", "登入", "密碼"],
-  儲值: ["儲值", "入金", "充值"],
-  提領: ["提款", "出金"],
-  遊戲: ["遊戲", "注單", "輸贏"],
-  代理: ["代理", "推廣"],
-};
-
-// ====== 存資料 ======
+// ===== 存資料（支援圖文）=====
 function saveMessage(msg) {
   const text = msg.text || msg.caption || "";
-  if (!text) return;
+  let file_id = null;
+  let type = "text";
+
+  if (msg.photo) {
+    file_id = msg.photo[msg.photo.length - 1].file_id;
+    type = "photo";
+  }
 
   db.run(
-    `INSERT INTO messages (chat_id, message_id, text, date) VALUES (?, ?, ?, ?)`,
-    [msg.chat.id, msg.message_id, text, msg.date]
+    `INSERT INTO messages (chat_id, message_id, text, file_id, type, date)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [msg.chat.id, msg.message_id, text, file_id, type, msg.date]
   );
 }
 
-// ====== 刪除資料 ======
+// ===== 刪除同步 =====
 function deleteMessage(chatId, messageId) {
   db.run(
     `DELETE FROM messages WHERE chat_id = ? AND message_id = ?`,
@@ -62,43 +62,42 @@ function deleteMessage(chatId, messageId) {
   );
 }
 
-// ====== 抓分類 ======
-function getCategory(text) {
-  for (let key in categories) {
-    if (categories[key].some(k => text.includes(k))) {
-      return key;
-    }
-  }
-  return null;
-}
-
-// ====== 查詢 ======
-function search(keyword, category, callback) {
+// ===== 智慧模糊搜尋 =====
+function smartSearch(keyword, callback) {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return callback([]);
 
-    let filtered = rows.filter(r => {
-      if (!r.text) return false;
+    keyword = keyword.toLowerCase();
 
-      // 必須包含關鍵字
-      if (!r.text.includes(keyword)) return false;
+    let scored = rows.map(r => {
+      if (!r.text) return null;
 
-      // 如果有分類 → 必須符合分類
-      if (category) {
-        return categories[category].some(k => r.text.includes(k));
-      }
+      let text = r.text.toLowerCase();
 
-      return true;
-    });
+      let score = 0;
 
-    // 去重
+      // 🔥 關鍵字完整命中
+      if (text.includes(keyword)) score += 5;
+
+      // 🔥 拆字比對
+      keyword.split("").forEach(k => {
+        if (text.includes(k)) score += 1;
+      });
+
+      return { ...r, score };
+    })
+    .filter(r => r && r.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+    // 去重（避免重複內容）
     let unique = [];
     let seen = new Set();
 
-    for (let r of filtered) {
-      if (!seen.has(r.text)) {
-        seen.add(r.text);
-        unique.push(r.text);
+    for (let r of scored) {
+      let key = r.text + (r.file_id || "");
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(r);
       }
     }
 
@@ -106,7 +105,7 @@ function search(keyword, category, callback) {
   });
 }
 
-// ====== 收資料 ======
+// ===== 收資料 =====
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
 
@@ -115,12 +114,12 @@ bot.on("message", (msg) => {
   }
 });
 
-// ====== 刪除同步 ======
+// ===== 刪除同步 =====
 bot.on("deleted_message", (msg) => {
   deleteMessage(msg.chat.id, msg.message_id);
 });
 
-// ====== 查詢入口 ======
+// ===== 查詢 =====
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -131,50 +130,32 @@ bot.on("message", (msg) => {
   // 管理指令
   if (text === "/stats") {
     db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
-      bot.sendMessage(chatId, `📊 目前資料數量：${row.count}`);
+      bot.sendMessage(chatId, `📊 資料數：${row.count}`);
     });
     return;
   }
 
-  if (text === "/clear") {
-    db.run(`DELETE FROM messages`);
-    bot.sendMessage(chatId, "🧹 已清空資料庫");
-    return;
-  }
-
-  // 👉 先給分類選單
-  let buttons = Object.keys(categories).map(c => ([{ text: c }]));
-
-  bot.sendMessage(chatId, "🔍 請選擇查詢分類：", {
-    reply_markup: {
-      keyboard: buttons,
-      one_time_keyboard: true,
-      resize_keyboard: true
-    }
-  });
-
-  // 等使用者選分類
-  bot.once("message", (msg2) => {
-    const category = msg2.text;
-
-    if (!categories[category]) {
-      bot.sendMessage(chatId, "❌ 分類錯誤");
+  smartSearch(text, (results) => {
+    if (results.length === 0) {
+      bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
-    search(text, category, (results) => {
-      if (results.length === 0) {
-        bot.sendMessage(chatId, "❌ 找不到資料");
-        return;
+    results.forEach(r => {
+
+      // 📷 有圖片
+      if (r.type === "photo" && r.file_id) {
+        bot.sendPhoto(chatId, r.file_id, {
+          caption: r.text || ""
+        });
+      } 
+      // 📝 純文字
+      else {
+        bot.sendMessage(chatId, r.text);
       }
 
-      let reply = "📌 查詢結果：\n\n";
-      results.forEach((r, i) => {
-        reply += `${i + 1}. ${r}\n\n`;
-      });
-
-      bot.sendMessage(chatId, reply);
     });
+
   });
 });
 
