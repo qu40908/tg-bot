@@ -5,7 +5,7 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Web (Render用) =====
+// ===== Web =====
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 app.listen(process.env.PORT || 3000);
@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
-// ===== 群 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -30,6 +29,9 @@ const sourceGroups = [
 const queryGroups = [
   -1003874245157
 ];
+
+// 👉 暫存查詢結果（讓數字可以對應）
+let lastQueryMap = {};
 
 // ===== 存資料 =====
 bot.on("message", (msg) => {
@@ -45,32 +47,7 @@ bot.on("message", (msg) => {
   );
 });
 
-// ===== 查詢 + 顯示整段 =====
-bot.on("message", (msg) => {
-  const chatId = msg.chat.id;
-  const keyword = msg.text;
-
-  if (!queryGroups.includes(chatId)) return;
-  if (!keyword) return;
-
-  db.all(`SELECT * FROM messages`, [], (err, rows) => {
-    if (err) return;
-
-    let found = rows.find(r =>
-      r.text && r.text.toLowerCase().includes(keyword.toLowerCase())
-    );
-
-    if (!found) {
-      bot.sendMessage(chatId, "❌ 找不到相關資料");
-      return;
-    }
-
-    // 👉 直接顯示整段（像你圖二）
-    bot.sendMessage(chatId, found.text);
-  });
-});
-
-// ===== 回覆某一行 → 回原文 =====
+// ===== 查詢 =====
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -78,31 +55,45 @@ bot.on("message", (msg) => {
   if (!queryGroups.includes(chatId)) return;
   if (!text) return;
 
-  db.all(`SELECT * FROM messages`, [], (err, rows) => {
-    if (err) return;
+  // 👉 如果輸入是數字（點擊）
+  if (/^\d+$/.test(text)) {
+    let index = parseInt(text) - 1;
+    let data = lastQueryMap[chatId];
 
-    let match = null;
+    if (data && data[index]) {
+      let item = data[index];
 
-    rows.forEach(r => {
-      if (!r.text) return;
-
-      let lines = r.text.split("\n");
-
-      lines.forEach(line => {
-        if (line.includes(text)) {
-          match = r;
-        }
-      });
-    });
-
-    if (match) {
       bot.forwardMessage(
         chatId,
-        match.chat_id,
-        match.message_id
+        item.chat_id,
+        item.message_id
       );
     }
-  });
+    return;
+  }
+
+  // 👉 查分類（只抓第一筆）
+  db.get(
+    `SELECT * FROM messages WHERE text LIKE ? LIMIT 1`,
+    [`%${text}%`],
+    (err, row) => {
+      if (err || !row) {
+        bot.sendMessage(chatId, "❌ 找不到資料");
+        return;
+      }
+
+      // 👉 顯示整段（圖一效果）
+      bot.sendMessage(chatId, row.text);
+
+      // 👉 建立編號對應（圖2用）
+      let lines = row.text.split("\n").filter(l => /^\d+\./.test(l));
+
+      lastQueryMap[chatId] = lines.map(() => ({
+        chat_id: row.chat_id,
+        message_id: row.message_id
+      }));
+    }
+  );
 });
 
-console.log("🔥 最終版（回覆觸發）已啟動");
+console.log("🔥 最終版（數字選擇）已啟動");
