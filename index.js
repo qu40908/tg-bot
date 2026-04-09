@@ -1,154 +1,124 @@
 const TelegramBot = require('node-telegram-bot-api');
-const db = require('./db');
+const fs = require('fs');
 
+// 🔑 Token（Render 用環境變數）
 const token = process.env.TOKEN;
 
-if (!token) {
-  console.error('❌ TOKEN 未設定');
-  process.exit(1);
-}
-
+// 👉 初始化 Bot
 const bot = new TelegramBot(token, { polling: true });
 
 console.log('✅ BOT 已啟動');
 
-// 👉 群設定
-const sourceGroups = [ 
-  -1003825428908,
-  -1003877293059,
+// 👉 資料群（你指定的）
+const sourceGroups = [
+  -1003825428908, // 資料群
+  -1003877293059  // 資料群
 ];
 
-const queryGroups = [-1003874245157];
+// 👉 查詢群
+const queryGroups = [
+  -1003874245157
+];
 
-// =======================
-// 工具
-// =======================
-function normalize(text) {
-  return text.toLowerCase().replace(/[^\u4e00-\u9fa5a-z0-9]/g, '');
+// 👉 JSON 檔
+const DATA_FILE = './data.json';
+
+// 👉 讀資料
+function loadData() {
+  if (!fs.existsSync(DATA_FILE)) return [];
+  return JSON.parse(fs.readFileSync(DATA_FILE));
 }
 
-// =======================
-// 存資料（防重複🔥）
-// =======================
-function saveMessage(msg) {
-  const text = msg.text || msg.caption || '';
-  if (!text || text.length < 3) return;
-
-  const norm = normalize(text).slice(0, 50);
-
-  db.get(
-    'SELECT 1 FROM messages WHERE text LIKE ? LIMIT 1',
-    [`%${norm}%`],
-    (err, row) => {
-      if (!row) {
-        db.save(msg.chat.id, msg.message_id, text, msg.date);
-      }
-    }
-  );
+// 👉 存資料
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// =======================
-// 搜尋
-// =======================
-function findCandidates(keyword, callback) {
-  const clean = normalize(keyword);
-
-  db.all(
-    `SELECT * FROM messages ORDER BY date DESC LIMIT 500`,
-    [],
-    (err, rows) => {
-      if (err) return callback([]);
-
-      let results = [];
-
-      rows.forEach(r => {
-        if (!r.text || r.text.length < 5) return;
-
-        const lines = r.text.split('\n');
-        const title = lines[0] || '';
-        const preview = lines.slice(0, 3).join(' ');
-
-        const titleNorm = normalize(title);
-        const textNorm = normalize(r.text);
-
-        let score = 0;
-
-        if (titleNorm.includes(clean)) score += 5;
-        if (normalize(preview).includes(clean)) score += 3;
-        if (textNorm.includes(clean)) score += 1;
-
-        if (clean !== '優惠' && title.includes('優惠')) score -= 3;
-
-        if (score > 0) {
-          results.push({ ...r, score, title });
-        }
-      });
-
-      results.sort((a, b) => b.score - a.score);
-
-      const map = new Map();
-      results.forEach(r => {
-        const key = normalize(r.text).slice(0, 50);
-        if (!map.has(key)) map.set(key, r);
-      });
-
-      callback(Array.from(map.values()).slice(0, 5));
-    }
-  );
-}
-
-let userChoices = {};
-
-// =======================
-// 主邏輯
-// =======================
+// =========================
+// 📥 存資料（只存資料群）
+// =========================
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text || '';
 
-  console.log('📩', chatId, text);
+  if (!sourceGroups.includes(chatId)) return;
 
-  if (sourceGroups.includes(chatId)) {
-    saveMessage(msg);
-  }
+  const text = msg.text || msg.caption || '';
+  if (!text) return;
 
-  if (!queryGroups.includes(chatId)) return;
-  if (!text || text.length < 2) return;
+  let data = loadData();
 
-  findCandidates(text, (results) => {
-    if (!results.length) {
-      bot.sendMessage(chatId, '❌ 找不到資料');
-      return;
-    }
+  // ❌ 過濾已刪除
+  if (text.includes('已刪除') || text.includes('刪除')) return;
 
-    userChoices[chatId] = results;
+  // ❌ 避免重複
+  if (data.some(d => d.message_id === msg.message_id)) return;
 
-    const buttons = results.map((r, i) => [{
-      text: `${i + 1}. ${(r.title || '').slice(0, 15)}`,
-      callback_data: String(i)
-    }]);
-
-    bot.sendMessage(chatId, '🔍 你是不是要找👇', {
-      reply_markup: { inline_keyboard: buttons }
-    });
+  data.push({
+    chat_id: msg.chat.id,
+    message_id: msg.message_id,
+    text: text,
+    date: msg.date
   });
+
+  saveData(data);
 });
 
-// =======================
-// 點擊
-// =======================
-bot.on('callback_query', (query) => {
-  const chatId = query.message.chat.id;
-  const index = parseInt(query.data);
+// =========================
+// 🔍 查詢
+// =========================
+bot.on('message', (msg) => {
+  const chatId = msg.chat.id;
 
-  const item = userChoices[chatId]?.[index];
-  if (!item) return bot.sendMessage(chatId, '❌ 失效');
+  if (!queryGroups.includes(chatId)) return;
 
-  bot.copyMessage(chatId, item.chat_id, item.message_id)
-    .catch(() => {
-      db.remove(item.chat_id, item.message_id);
-      bot.sendMessage(chatId, '⚠️ 已刪除資料（自動清理）');
-    });
+  const keyword = (msg.text || '').trim();
+  if (!keyword) return;
 
-  bot.answerCallbackQuery(query.id);
+  let data = loadData();
+
+  // 🔍 模糊搜尋
+  let results = data.filter(d =>
+    d.text.toLowerCase().includes(keyword.toLowerCase())
+  );
+
+  // ❌ 過濾已刪除
+  results = results.filter(d =>
+    !d.text.includes('已刪除') &&
+    !d.text.includes('刪除')
+  );
+
+  // ❌ 過濾優惠（你剛剛問題🔥）
+  if (!keyword.includes('優惠')) {
+    results = results.filter(d =>
+      !d.text.includes('優惠')
+    );
+  }
+
+  // ❌ 去重複（關鍵🔥）
+  const unique = [];
+  const seen = new Set();
+
+  for (let item of results) {
+    if (!seen.has(item.text)) {
+      seen.add(item.text);
+      unique.push(item);
+    }
+  }
+
+  // 👉 沒資料
+  if (unique.length === 0) {
+    bot.sendMessage(chatId, '❌ 查無相關資料');
+    return;
+  }
+
+  // 👉 限制數量
+  const top = unique.slice(0, 5);
+
+  let reply = `🔍 找到 ${top.length} 筆相關：\n\n`;
+
+  top.forEach((item, i) => {
+    reply += `${i + 1}. ${item.text}\n\n`;
+  });
+
+  bot.sendMessage(chatId, reply);
 });
