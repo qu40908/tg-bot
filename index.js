@@ -5,7 +5,7 @@ const express = require("express");
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Web =====
+// ===== Web (Render用) =====
 const app = express();
 app.get("/", (req, res) => res.send("OK"));
 app.listen(process.env.PORT || 3000);
@@ -30,10 +30,9 @@ const queryGroups = [
   -1003874245157
 ];
 
-// 👉 暫存查詢結果（讓數字可以對應）
-let lastQueryMap = {};
-
-// ===== 存資料 =====
+// =========================
+// 📥 收資料（來源群）
+// =========================
 bot.on("message", (msg) => {
   if (!sourceGroups.includes(msg.chat.id)) return;
 
@@ -47,53 +46,78 @@ bot.on("message", (msg) => {
   );
 });
 
-// ===== 查詢 =====
+// =========================
+// 🔍 查詢（客服群）
+// =========================
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const keyword = msg.text;
 
   if (!queryGroups.includes(chatId)) return;
-  if (!text) return;
+  if (!keyword) return;
 
-  // 👉 如果輸入是數字（點擊）
-  if (/^\d+$/.test(text)) {
-    let index = parseInt(text) - 1;
-    let data = lastQueryMap[chatId];
-
-    if (data && data[index]) {
-      let item = data[index];
-
-      bot.forwardMessage(
-        chatId,
-        item.chat_id,
-        item.message_id
-      );
-    }
-    return;
-  }
-
-  // 👉 查分類（只抓第一筆）
   db.get(
     `SELECT * FROM messages WHERE text LIKE ? LIMIT 1`,
-    [`%${text}%`],
+    [`%${keyword}%`],
     (err, row) => {
       if (err || !row) {
-        bot.sendMessage(chatId, "❌ 找不到資料");
+        bot.sendMessage(chatId, "❌ 找不到相關資料");
         return;
       }
 
-      // 👉 顯示整段（圖一效果）
+      // 👉 抓清單（1. 2. 3.）
+      const lines = row.text
+        .split("\n")
+        .filter(l => /^\d+\./.test(l));
+
+      // 👉 建立按鈕（長得像清單）
+      const keyboard = lines.map((line) => [{
+        text: line,
+        callback_data: JSON.stringify({
+          chat_id: row.chat_id,
+          message_id: row.message_id,
+          keyword: line.replace(/^\d+\.\s*/, "")
+        })
+      }]);
+
+      // 👉 先顯示原文（完整）
       bot.sendMessage(chatId, row.text);
 
-      // 👉 建立編號對應（圖2用）
-      let lines = row.text.split("\n").filter(l => /^\d+\./.test(l));
-
-      lastQueryMap[chatId] = lines.map(() => ({
-        chat_id: row.chat_id,
-        message_id: row.message_id
-      }));
+      // 👉 再給可點選清單（像你畫面）
+      bot.sendMessage(chatId, "👇 點選項目查看內容", {
+        reply_markup: {
+          inline_keyboard: keyboard
+        }
+      });
     }
   );
 });
 
-console.log("🔥 最終版（數字選擇）已啟動");
+// =========================
+// 🎯 點擊 → 回傳該項內容
+// =========================
+bot.on("callback_query", (query) => {
+  const data = JSON.parse(query.data);
+  const chatId = query.message.chat.id;
+
+  // 👉 找最符合該項的內容
+  db.get(
+    `SELECT * FROM messages WHERE text LIKE ? LIMIT 1`,
+    [`%${data.keyword}%`],
+    (err, row) => {
+      if (row) {
+        bot.forwardMessage(
+          chatId,
+          row.chat_id,
+          row.message_id
+        );
+      } else {
+        bot.sendMessage(chatId, "❌ 找不到該項內容");
+      }
+    }
+  );
+
+  bot.answerCallbackQuery(query.id);
+});
+
+console.log("🔥 客服系統（進階版）已啟動");
