@@ -6,7 +6,7 @@ const express = require("express");
 // ===== BOT =====
 const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ===== Render Web =====
+// ===== Web（Render用）=====
 const app = express();
 app.get("/", (req, res) => res.send("BOT RUNNING"));
 const PORT = process.env.PORT || 3000;
@@ -22,11 +22,12 @@ CREATE TABLE IF NOT EXISTS messages (
   text TEXT,
   file_id TEXT,
   type TEXT,
-  date INTEGER
+  date INTEGER,
+  entities TEXT
 )
 `);
 
-// ===== 群 =====
+// ===== 群設定 =====
 const sourceGroups = [
   -1003825428908,
   -1003877293059,
@@ -36,9 +37,11 @@ const queryGroups = [
   -1003874245157
 ];
 
-// ===== 存資料（支援圖文）=====
+// ===== 存資料（含連結）=====
 function saveMessage(msg) {
   const text = msg.text || msg.caption || "";
+  if (!text && !msg.photo) return;
+
   let file_id = null;
   let type = "text";
 
@@ -47,10 +50,12 @@ function saveMessage(msg) {
     type = "photo";
   }
 
+  const entities = JSON.stringify(msg.entities || msg.caption_entities || []);
+
   db.run(
-    `INSERT INTO messages (chat_id, message_id, text, file_id, type, date)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [msg.chat.id, msg.message_id, text, file_id, type, msg.date]
+    `INSERT INTO messages (chat_id, message_id, text, file_id, type, date, entities)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [msg.chat.id, msg.message_id, text, file_id, type, msg.date, entities]
   );
 }
 
@@ -62,7 +67,7 @@ function deleteMessage(chatId, messageId) {
   );
 }
 
-// ===== 智慧模糊搜尋 =====
+// ===== 智慧模糊搜尋（升級版）=====
 function smartSearch(keyword, callback) {
   db.all(`SELECT * FROM messages`, [], (err, rows) => {
     if (err) return callback([]);
@@ -76,10 +81,10 @@ function smartSearch(keyword, callback) {
 
       let score = 0;
 
-      // 🔥 關鍵字完整命中
-      if (text.includes(keyword)) score += 5;
+      // 強命中
+      if (text.includes(keyword)) score += 10;
 
-      // 🔥 拆字比對
+      // 關鍵字拆分
       keyword.split("").forEach(k => {
         if (text.includes(k)) score += 1;
       });
@@ -89,7 +94,7 @@ function smartSearch(keyword, callback) {
     .filter(r => r && r.score > 0)
     .sort((a, b) => b.score - a.score);
 
-    // 去重（避免重複內容）
+    // 去重（文字+圖片）
     let unique = [];
     let seen = new Set();
 
@@ -107,9 +112,7 @@ function smartSearch(keyword, callback) {
 
 // ===== 收資料 =====
 bot.on("message", (msg) => {
-  const chatId = msg.chat.id;
-
-  if (sourceGroups.includes(chatId)) {
+  if (sourceGroups.includes(msg.chat.id)) {
     saveMessage(msg);
   }
 });
@@ -127,7 +130,7 @@ bot.on("message", (msg) => {
   if (!queryGroups.includes(chatId)) return;
   if (!text) return;
 
-  // 管理指令
+  // 管理
   if (text === "/stats") {
     db.get(`SELECT COUNT(*) as count FROM messages`, (err, row) => {
       bot.sendMessage(chatId, `📊 資料數：${row.count}`);
@@ -135,6 +138,13 @@ bot.on("message", (msg) => {
     return;
   }
 
+  if (text === "/clear") {
+    db.run(`DELETE FROM messages`);
+    bot.sendMessage(chatId, "🧹 已清空資料");
+    return;
+  }
+
+  // 查詢
   smartSearch(text, (results) => {
     if (results.length === 0) {
       bot.sendMessage(chatId, "❌ 找不到相關資料");
@@ -142,18 +152,21 @@ bot.on("message", (msg) => {
     }
 
     results.forEach(r => {
+      const entities = r.entities ? JSON.parse(r.entities) : [];
 
-      // 📷 有圖片
+      // 📷 圖片
       if (r.type === "photo" && r.file_id) {
         bot.sendPhoto(chatId, r.file_id, {
-          caption: r.text || ""
+          caption: r.text || "",
+          caption_entities: entities
         });
       } 
-      // 📝 純文字
+      // 📝 文字（含連結）
       else {
-        bot.sendMessage(chatId, r.text);
+        bot.sendMessage(chatId, r.text, {
+          entities: entities
+        });
       }
-
     });
 
   });
