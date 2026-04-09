@@ -1,13 +1,17 @@
 const TelegramBot = require("node-telegram-bot-api");
 const sqlite3 = require("sqlite3").verbose();
+const express = require("express");
 
-const token = process.env.TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(process.env.TOKEN, { polling: true });
 
-// ✅ DB
+// ===== Web server（Render必備）
+const app = express();
+app.get("/", (req, res) => res.send("OK"));
+app.listen(process.env.PORT || 3000);
+
+// ===== DB
 const db = new sqlite3.Database("./data.db");
 
-// ✅ 建表
 db.run(`
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,24 +21,22 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 `);
 
-// ✅ 你要抓資料的群（自己填）
+// ===== 你的資料群（存資料）
 const sourceGroups = [
   -1003825428908, // 資料群
   -1003877293059  // 資料群
 ];
 
-// ✅ 允許查詢的群
+// ===== 查詢群
 const queryGroups = [
-  -1003874245157, // ← 查詢群
+  -1003874245157
 ];
 
-// =========================
-// 📌 儲存資料（含文字）
-// =========================
+// =======================
+// 📥 存資料
+// =======================
 bot.on("message", (msg) => {
-  const chatId = msg.chat.id;
-
-  if (!sourceGroups.includes(chatId)) return;
+  if (!sourceGroups.includes(msg.chat.id)) return;
   if (!msg.text) return;
 
   db.run(
@@ -43,52 +45,73 @@ bot.on("message", (msg) => {
   );
 });
 
-// =========================
-// 🔍 查詢（核心）
-// =========================
+// =======================
+// 🎯 查詢入口（顯示分類按鈕）
+// =======================
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
-  const keyword = msg.text;
+  const text = msg.text;
 
   if (!queryGroups.includes(chatId)) return;
-  if (!keyword) return;
+  if (!text) return;
 
+  // 👉 找到相關分類（模糊）
   db.all(
-    `
-    SELECT * FROM messages 
-    WHERE text LIKE ? 
-    ORDER BY message_id DESC 
-    LIMIT 10
-    `,
-    [`%${keyword}%`],
+    `SELECT DISTINCT text FROM messages WHERE text LIKE ? LIMIT 5`,
+    [`%${text}%`],
     (err, rows) => {
-      if (err || !rows || rows.length === 0) {
+      if (!rows || rows.length === 0) {
         bot.sendMessage(chatId, "❌ 找不到相關資料");
         return;
       }
 
-      // ✅ 逐筆原封不動轉發（保留超連結）
-      rows.forEach((row) => {
-        bot.forwardMessage(
-          chatId,
-          row.chat_id,
-          row.message_id
-        );
+      // 👉 建按鈕（分類）
+      const keyboard = rows.map((row, i) => [{
+        text: `${i + 1}. ${getTitle(row.text)}`,
+        callback_data: `pick_${i}`
+      }]);
+
+      // 👉 存暫存（讓 callback 用）
+      userCache[chatId] = rows;
+
+      bot.sendMessage(chatId, "👉 請選擇：", {
+        reply_markup: {
+          inline_keyboard: keyboard
+        }
       });
     }
   );
 });
 
-console.log("🔥 客服級機器人已啟動");
+// =======================
+// 🎯 點擊後回傳內容
+// =======================
+const userCache = {};
 
-const express = require("express");
-const app = express();
+bot.on("callback_query", (query) => {
+  const chatId = query.message.chat.id;
+  const index = query.data.split("_")[1];
 
-app.get("/", (req, res) => {
-  res.send("Bot is running ✅");
+  const data = userCache[chatId];
+  if (!data) return;
+
+  const item = data[index];
+
+  // ✅ 用 copyMessage（不顯示來源）
+  bot.copyMessage(
+    chatId,
+    item.chat_id,
+    item.message_id
+  );
+
+  bot.answerCallbackQuery(query.id);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("🌐 Web server running on port " + PORT);
-});
+// =======================
+// 🧠 抓標題（第一行）
+// =======================
+function getTitle(text) {
+  return text.split("\n")[0].slice(0, 20);
+}
+
+console.log("🔥 客服按鈕版啟動");
