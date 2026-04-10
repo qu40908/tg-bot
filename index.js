@@ -1,110 +1,106 @@
 const TelegramBot = require("node-telegram-bot-api");
-const sqlite3 = require("sqlite3").verbose();
 const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
+
+// ===== Supabase
+const supabase = createClient(
+  "https://nduirhpyrjrhxnypppj.supabase.co",
+  "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
+);
 
 // ===== BOT
 const bot = new TelegramBot(process.env.TOKEN, {
-  polling: {
-    autoStart: true,
-    interval: 300,
-  },
+  polling: true
 });
 
-// ===== Render 必備（防 timeout）
+// ===== Render 保活
 const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
-// ===== DB
-const db = new sqlite3.Database("./data.db");
-
-db.run(`
-CREATE TABLE IF NOT EXISTS messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  chat_id TEXT,
-  message_id TEXT,
-  text TEXT
-)
-`);
-
 // =======================
-// 👉 你的群組（已幫你放好）
+// 群組設定
 // =======================
-
-// 📌 資料群（存資料）
 const sourceGroups = [
   -1003825428908,
   -1003877293059
 ];
 
-// 📌 查詢群（使用者查詢）
 const queryGroups = [
   -1003874245157
 ];
 
-// 暫存（按鈕用）
+// 暫存
 const userCache = {};
 
 // =======================
-// 📥 存資料
+// 主邏輯
 // =======================
-bot.on("message", (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
+bot.on("message", async (msg) => {
+  try {
+    const chatId = msg.chat.id;
+    const text = msg.text;
 
-  if (!text) return;
+    if (!text) return;
 
-  // ===================
-  // 📥 存資料
-  // ===================
-  if (sourceGroups.includes(chatId)) {
-    db.run(
-      `INSERT INTO messages (chat_id, message_id, text) VALUES (?, ?, ?)`,
-      [chatId, msg.message_id, text]
-    );
-    return;
-  }
-
-  // ===================
-  // 🔍 查詢
-  // ===================
-  if (!queryGroups.includes(chatId)) return;
-
-  db.all(
-    `SELECT * FROM messages 
-     WHERE text LIKE ? 
-     ORDER BY message_id DESC 
-     LIMIT 10`,
-    [`%${text}%`],
-    (err, rows) => {
-      if (err || !rows || rows.length === 0) {
-        bot.sendMessage(chatId, "❌ 找不到相關資料");
-        return;
-      }
-
-      userCache[chatId] = rows;
-
-      const keyboard = rows.map((row, i) => [{
-        text: `${i + 1}. ${getTitle(row.text)}`,
-        callback_data: `pick_${i}`
-      }]);
-
-      bot.sendMessage(chatId, "👉 請選擇：", {
-        reply_markup: {
-          inline_keyboard: keyboard
+    // ===================
+    // 📥 存資料（資料群）
+    // ===================
+    if (sourceGroups.includes(chatId)) {
+      await supabase.from("messages").insert([
+        {
+          chat_id: chatId,
+          message_id: msg.message_id,
+          text: text
         }
-      });
+      ]);
+      return;
     }
-  );
+
+    // ===================
+    // 🔍 查詢（查詢群）
+    // ===================
+    if (!queryGroups.includes(chatId)) return;
+
+    const keyword = text;
+
+    const { data, error } = await supabase
+      .from("messages")
+      .select("*")
+      .ilike("text", `%${keyword}%`)
+      .order("id", { ascending: false })
+      .limit(10);
+
+    if (error || !data || data.length === 0) {
+      bot.sendMessage(chatId, "❌ 找不到相關資料");
+      return;
+    }
+
+    // 存暫存
+    userCache[chatId] = data;
+
+    // 建按鈕
+    const keyboard = data.map((row, i) => [{
+      text: `${i + 1}. ${getTitle(row.text)}`,
+      callback_data: `pick_${i}`
+    }]);
+
+    bot.sendMessage(chatId, "👉 請選擇：", {
+      reply_markup: {
+        inline_keyboard: keyboard
+      }
+    });
+
+  } catch (err) {
+    console.log("❌ message error:", err);
+  }
 });
 
 // =======================
-// 👉 點擊按鈕（關鍵）
+// 點擊按鈕
 // =======================
 bot.on("callback_query", async (query) => {
   try {
-    console.log("🔥 點擊:", query.data);
-
     const chatId = query.message.chat.id;
     const index = parseInt(query.data.split("_")[1]);
 
@@ -112,7 +108,7 @@ bot.on("callback_query", async (query) => {
 
     if (!data || !data[index]) {
       await bot.answerCallbackQuery(query.id, {
-        text: "❌ 資料過期，請重新查詢",
+        text: "❌ 資料過期",
         show_alert: true
       });
       return;
@@ -120,7 +116,7 @@ bot.on("callback_query", async (query) => {
 
     const item = data[index];
 
-    // ✅ 不顯示來源
+    // 回原文（含超連結）
     await bot.copyMessage(
       chatId,
       item.chat_id,
@@ -135,11 +131,11 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 🧠 標題處理
+// 標題
 // =======================
 function getTitle(text) {
   if (!text) return "資料";
   return text.split("\n")[0].slice(0, 25);
 }
 
-console.log("🔥 客服系統已啟動");
+console.log("🔥 Supabase 客服系統已啟動");
