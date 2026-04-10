@@ -12,7 +12,7 @@ const bot = new TelegramBot(process.env.TOKEN, {
 
 // ===== Render 必備（防 timeout）
 const app = express();
-app.get("/", (req, res) => res.send("OK"));
+app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
 // ===== DB
@@ -49,43 +49,41 @@ const userCache = {};
 // 📥 存資料
 // =======================
 bot.on("message", (msg) => {
-  if (!sourceGroups.includes(msg.chat.id)) return;
-  if (!msg.text) return;
-
-  db.run(
-    `INSERT INTO messages (chat_id, message_id, text) VALUES (?, ?, ?)`,
-    [msg.chat.id, msg.message_id, msg.text]
-  );
-});
-
-// =======================
-// 🔍 查詢 → 顯示按鈕
-// =======================
-bot.on("message", (msg) => {
   const chatId = msg.chat.id;
-  const keyword = msg.text;
+  const text = msg.text;
 
+  if (!text) return;
+
+  // ===================
+  // 📥 存資料
+  // ===================
+  if (sourceGroups.includes(chatId)) {
+    db.run(
+      `INSERT INTO messages (chat_id, message_id, text) VALUES (?, ?, ?)`,
+      [chatId, msg.message_id, text]
+    );
+    return;
+  }
+
+  // ===================
+  // 🔍 查詢
+  // ===================
   if (!queryGroups.includes(chatId)) return;
-  if (!keyword) return;
 
   db.all(
-    `
-    SELECT * FROM messages 
-    WHERE text LIKE ? 
-    ORDER BY message_id DESC 
-    LIMIT 10
-    `,
-    [`%${keyword}%`],
+    `SELECT * FROM messages 
+     WHERE text LIKE ? 
+     ORDER BY message_id DESC 
+     LIMIT 10`,
+    [`%${text}%`],
     (err, rows) => {
       if (err || !rows || rows.length === 0) {
         bot.sendMessage(chatId, "❌ 找不到相關資料");
         return;
       }
 
-      // 👉 存暫存
       userCache[chatId] = rows;
 
-      // 👉 建按鈕
       const keyboard = rows.map((row, i) => [{
         text: `${i + 1}. ${getTitle(row.text)}`,
         callback_data: `pick_${i}`
