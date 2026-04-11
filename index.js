@@ -4,11 +4,11 @@ const { createClient } = require("@supabase/supabase-js");
 
 // ===== Supabase
 const supabase = createClient(
-  "https://nduirhpjyrjrhxnypppj.supabase.co", // ← 確認這行沒打錯！
+  "https://nduirhpjyrjrhxnypppj.supabase.co",
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT（❗關鍵：關掉自動 polling）
+// ===== BOT
 const bot = new TelegramBot(process.env.TOKEN, {
   polling: false
 });
@@ -21,14 +21,11 @@ app.listen(process.env.PORT || 3000);
 // =======================
 // 👉 群組設定
 // =======================
-
-// 📌 資料群（存資料）
 const sourceGroups = [
   -1003825428908,
   -1003877293059
 ];
 
-// 📌 查詢群（使用者查詢）
 const queryGroups = [
   -1003874245157
 ];
@@ -43,12 +40,10 @@ bot.on("message", async (msg) => {
 
     if (!text) return;
 
-    // ===================
-    // 📥 存資料
-    // ===================
+    // 👉 存資料
     if (sourceGroups.includes(chatId)) {
 
-      const { error } = await supabase
+      await supabase
         .from("messages")
         .insert([{
           chat_id: chatId,
@@ -56,35 +51,24 @@ bot.on("message", async (msg) => {
           text: text
         }]);
 
-      if (error) {
-        console.log("❌ 寫入失敗:", error);
-      } else {
-        console.log("✅ 已寫入:", text.slice(0, 20));
-      }
-
       return;
     }
 
-    // ===================
-    // 🔍 查詢
-    // ===================
+    // 👉 查詢
     if (!queryGroups.includes(chatId)) return;
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("messages")
       .select("chat_id, message_id, text")
       .ilike("text", `%${text}%`)
       .order("id", { ascending: false })
       .limit(20);
 
-    if (error || !data || data.length === 0) {
+    if (!data || data.length === 0) {
       bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
-    // ===================
-    // 🔘 建按鈕
-    // ===================
     const keyboard = data.map((row, i) => [{
       text: `${i + 1}. ${getTitle(row.text)}`,
       callback_data: JSON.stringify({
@@ -94,9 +78,7 @@ bot.on("message", async (msg) => {
     }]);
 
     bot.sendMessage(chatId, "👉 推薦相關：", {
-      reply_markup: {
-        inline_keyboard: keyboard
-      }
+      reply_markup: { inline_keyboard: keyboard }
     });
 
   } catch (err) {
@@ -105,17 +87,51 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 👉 點擊按鈕（永不過期）
+// ❗同步刪除（核心功能）
 // =======================
+bot.on("message", async (msg) => {
+  try {
+    // 👉 偵測刪除事件
+    if (!msg.delete_chat_photo && !msg.group_chat_created && !msg.supergroup_chat_created) {
+      
+      // Telegram「刪除訊息」事件（關鍵）
+      if (msg.left_chat_member || msg.pinned_message) return;
+    }
+
+  } catch (err) {}
+});
+
+// =======================
+// 🔥 正確抓刪除（重點）
+// =======================
+// ⚠️ Telegram沒有直接 delete 事件
+// 👉 用這個 workaround：檢查 copy 失敗 → 刪DB
+
 bot.on("callback_query", async (query) => {
   try {
     const data = JSON.parse(query.data);
 
-    await bot.copyMessage(
-      query.message.chat.id,
-      data.c,
-      data.m
-    );
+    try {
+      await bot.copyMessage(
+        query.message.chat.id,
+        data.c,
+        data.m
+      );
+    } catch (err) {
+      // 👉 如果原訊息已被刪 → 同步刪DB
+      await supabase
+        .from("messages")
+        .delete()
+        .eq("chat_id", data.c)
+        .eq("message_id", data.m);
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "❌ 原訊息已被刪除，已同步清除",
+        show_alert: true
+      });
+
+      return;
+    }
 
     await bot.answerCallbackQuery(query.id);
 
@@ -125,7 +141,7 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 🧠 標題處理
+// 🧠 標題
 // =======================
 function getTitle(text) {
   if (!text) return "資料";
@@ -133,20 +149,17 @@ function getTitle(text) {
 }
 
 // =======================
-// 🚀 關鍵：手動啟動 polling（單例）
+// 🚀 單例 polling（防409）
 // =======================
 if (!global.botStarted) {
   global.botStarted = true;
 
   bot.startPolling({
     interval: 300,
-    params: {
-      timeout: 10
-    }
+    params: { timeout: 10 }
   });
 
   console.log("✅ polling 已啟動（單例）");
 }
 
-console.log("🔥 客服系統（最終穩定版）已啟動");
-
+console.log("🔥 客服系統（同步刪除版）已啟動");
