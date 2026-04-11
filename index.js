@@ -18,9 +18,7 @@ const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
-// =======================
-// 群組設定
-// =======================
+// ===== 群組設定
 const sourceGroups = [
   -1003825428908,
   -1003877293059
@@ -30,7 +28,7 @@ const queryGroups = [
   -1003874245157
 ];
 
-// 暫存
+// ===== 暫存
 const userCache = {};
 
 // =======================
@@ -44,21 +42,29 @@ bot.on("message", async (msg) => {
     if (!text) return;
 
     // ===================
-    // 📥 存資料（資料群）
+    // 📥 存資料（避免重複）
     // ===================
     if (sourceGroups.includes(chatId)) {
-      await supabase.from("messages").insert([
-        {
-          chat_id: chatId,
-          message_id: msg.message_id,
-          text: text
-        }
-      ]);
+      const { data: exist } = await supabase
+        .from("messages")
+        .select("id")
+        .eq("text", text)
+        .limit(1);
+
+      if (!exist || exist.length === 0) {
+        await supabase.from("messages").insert([
+          {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            text: text
+          }
+        ]);
+      }
       return;
     }
 
     // ===================
-    // 🔍 查詢（查詢群）
+    // 🔍 查詢
     // ===================
     if (!queryGroups.includes(chatId)) return;
 
@@ -66,21 +72,34 @@ bot.on("message", async (msg) => {
 
     const { data, error } = await supabase
       .from("messages")
-      .select("*")
+      .select("chat_id, message_id, text")
       .ilike("text", `%${keyword}%`)
       .order("id", { ascending: false })
-      .limit(10);
+      .limit(20);
 
     if (error || !data || data.length === 0) {
       bot.sendMessage(chatId, "❌ 找不到相關資料");
       return;
     }
 
+    // ===================
+    // 🔥 去重複（關鍵）
+    // ===================
+    const unique = [];
+    const map = new Set();
+
+    data.forEach(item => {
+      if (!map.has(item.text)) {
+        map.add(item.text);
+        unique.push(item);
+      }
+    });
+
     // 存暫存
-    userCache[chatId] = data;
+    userCache[chatId] = unique;
 
     // 建按鈕
-    const keyboard = data.map((row, i) => [{
+    const keyboard = unique.map((row, i) => [{
       text: `${i + 1}. ${getTitle(row.text)}`,
       callback_data: `pick_${i}`
     }]);
@@ -108,7 +127,7 @@ bot.on("callback_query", async (query) => {
 
     if (!data || !data[index]) {
       await bot.answerCallbackQuery(query.id, {
-        text: "❌ 資料過期",
+        text: "❌ 資料過期，請重新查詢",
         show_alert: true
       });
       return;
@@ -116,7 +135,7 @@ bot.on("callback_query", async (query) => {
 
     const item = data[index];
 
-    // 回原文（含超連結）
+    // 👉 回原文（含超連結）
     await bot.copyMessage(
       chatId,
       item.chat_id,
@@ -138,4 +157,4 @@ function getTitle(text) {
   return text.split("\n")[0].slice(0, 25);
 }
 
-console.log("🔥 Supabase 客服系統已啟動");
+console.log("🔥 Supabase 客服系統（最終版）已啟動");
