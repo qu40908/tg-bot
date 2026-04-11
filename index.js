@@ -8,7 +8,7 @@ const supabase = createClient(
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT
+// ===== BOT（單實例）
 const bot = new TelegramBot(process.env.TOKEN);
 bot.startPolling();
 
@@ -32,7 +32,7 @@ const queryGroups = [
 // =======================
 bot.on("message", async (msg) => {
   try {
-    // ❗防止兩段式
+    // ❗防止兩段式（關鍵）
     if (msg.from.is_bot) return;
 
     const chatId = msg.chat.id;
@@ -44,7 +44,6 @@ bot.on("message", async (msg) => {
 
     // ===== 存資料
     if (sourceGroups.includes(chatId)) {
-
       await supabase.from("messages").insert([
         {
           chat_id: chatId,
@@ -52,7 +51,6 @@ bot.on("message", async (msg) => {
           text
         }
       ]);
-
       return;
     }
 
@@ -61,7 +59,7 @@ bot.on("message", async (msg) => {
 
     const { data } = await supabase
       .from("messages")
-      .select("id, chat_id, message_id, text")
+      .select("chat_id, message_id, text")
       .ilike("text", `%${text}%`)
       .order("id", { ascending: false })
       .limit(20);
@@ -71,46 +69,8 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // =======================
-    // 🔥 核心：驗證是否存在
-    // =======================
-    const valid = [];
-
-    for (const row of data) {
-      try {
-        // 👉 偷偷測試（不會真的發送）
-        await bot.copyMessage(
-          chatId,
-          row.chat_id,
-          row.message_id,
-          { disable_notification: true }
-        );
-
-        // 👉 刪掉測試訊息（避免出現）
-        await bot.deleteMessage(chatId, row.message_id + 1);
-
-        valid.push(row);
-
-      } catch (err) {
-        // ❌ 已刪 → 從DB刪掉
-        console.log("🧹 清理無效資料:", row.id);
-
-        await supabase
-          .from("messages")
-          .delete()
-          .eq("id", row.id);
-      }
-    }
-
-    if (valid.length === 0) {
-      bot.sendMessage(chatId, "❌ 查無有效資料");
-      return;
-    }
-
-    // =======================
-    // 🔘 按鈕
-    // =======================
-    const keyboard = valid.map((row, i) => [
+    // ===== 按鈕（不驗證）
+    const keyboard = data.map((row, i) => [
       {
         text: `${i + 1}. ${getTitle(row.text)}`,
         callback_data: JSON.stringify({
@@ -122,7 +82,7 @@ bot.on("message", async (msg) => {
 
     bot.sendMessage(
       chatId,
-      "【📚推薦相關🔎】\n請選擇項目：",
+      "【📚推薦相關🔎】",
       {
         reply_markup: {
           inline_keyboard: keyboard
@@ -136,7 +96,7 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 👉 點擊顯示內容
+// 👉 點擊才驗證（穩定版）
 // =======================
 bot.on("callback_query", async (query) => {
   try {
@@ -151,7 +111,7 @@ bot.on("callback_query", async (query) => {
     await bot.answerCallbackQuery(query.id);
 
   } catch (err) {
-    console.log("❌ 已刪除，自動清理");
+    console.log("🧹 已刪除 → 清DB");
 
     const data = JSON.parse(query.data);
 
@@ -173,4 +133,4 @@ function getTitle(text) {
   return text ? text.split("\n")[0].slice(0, 25) : "資料";
 }
 
-console.log("🔥 完全同步版 已啟動");
+console.log("🔥 最終穩定版（不亂跳）啟動");
