@@ -8,12 +8,11 @@ const supabase = createClient(
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT（避免409）
+// ===== BOT（防409）
 const bot = new TelegramBot(process.env.TOKEN, {
   polling: false
 });
 
-// 手動啟動
 bot.startPolling({
   interval: 300,
   params: { timeout: 10 }
@@ -24,7 +23,7 @@ const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
-// ===== 群組
+// ===== 群組設定
 const sourceGroups = [-1003825428908, -1003877293059];
 const queryGroups = [-1003874245157];
 
@@ -50,7 +49,7 @@ bot.on("message", async (msg) => {
     }
 
     // =======================
-    // 🔍 查詢
+    // 🔍 查詢（只做按鈕）
     // =======================
     if (!queryGroups.includes(chatId)) return;
 
@@ -67,7 +66,7 @@ bot.on("message", async (msg) => {
     }
 
     // =======================
-    // 🔥 過濾已刪訊息
+    // 🔥 過濾已刪訊息（不顯示）
     // =======================
     const valid = [];
 
@@ -86,11 +85,11 @@ bot.on("message", async (msg) => {
     }
 
     // =======================
-    // 🖤 黑金風（低調版）
+    // 🖤 黑金低調版（無符號按鈕）
     // =======================
     const keyboard = valid.map((row, i) => [
       {
-        text: `✨ ${i + 1}. ${getTitle(row.text)}`,
+        text: `${i + 1}. ${getTitle(row.text)}`, // ✅ 無符號
         callback_data: JSON.stringify({
           c: row.chat_id,
           m: row.message_id
@@ -98,10 +97,10 @@ bot.on("message", async (msg) => {
       }
     ]);
 
-    // ❗❗重點：只發按鈕，不發內容
+    // ❗❗重點：只送這一段
     bot.sendMessage(
       chatId,
-      "🖤【Golden Secret】\n✨ 請選擇項目：",
+      "【📚推薦相關🔎】\n請選擇項目：",
       {
         reply_markup: {
           inline_keyboard: keyboard
@@ -139,4 +138,4 @@ function getTitle(text) {
   return text ? text.split("\n")[0].slice(0, 25) : "資料";
 }
 
-console.log("🔥 黑金客服系統啟動");
+console.log("🔥 黑金客服系統（無洗版版）啟動");
