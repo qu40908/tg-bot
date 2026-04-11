@@ -41,15 +41,25 @@ bot.on("message", async (msg) => {
   if (!text) return;
 
   if (sourceGroups.includes(chatId)) {
-    await supabase.from("messages").insert([
+
+  const { error } = await supabase
+    .from("messages")
+    .insert([
       {
         chat_id: chatId,
         message_id: msg.message_id,
         text: text
       }
     ]);
-    return;
+
+  if (error) {
+    console.log("❌ 寫入失敗:", error);
+  } else {
+    console.log("✅ 已寫入:", text.slice(0, 20));
   }
+
+  return;
+}
 
   if (!queryGroups.includes(chatId)) return;
 
