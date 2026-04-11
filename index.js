@@ -93,7 +93,7 @@ bot.on("message", async (msg) => {
       })
     }]);
 
-    bot.sendMessage(chatId, "👉 請選擇：", {
+    bot.sendMessage(chatId, "👉 推薦相關：", {
       reply_markup: {
         inline_keyboard: keyboard
       }
