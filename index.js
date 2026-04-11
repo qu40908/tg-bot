@@ -3,7 +3,7 @@ const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
 // =======================
-// ✅ Supabase（你的正確URL）
+// ✅ Supabase
 // =======================
 const supabase = createClient(
   "https://nduirhpjyrjrhxnypppj.supabase.co",
@@ -11,34 +11,27 @@ const supabase = createClient(
 );
 
 // =======================
-// ✅ BOT（防409衝突）
+// ✅ BOT（防409）
 // =======================
 const bot = new TelegramBot(process.env.TOKEN, {
   polling: false
 });
 
-// 👉 手動啟動 polling（只會一個實例）
 bot.startPolling({
   interval: 300,
-  params: {
-    timeout: 10
-  }
+  params: { timeout: 10 }
 });
 
-// =======================
-// ✅ Render 防 timeout
 // =======================
 const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
 // =======================
-// ✅ 啟動時間（防舊訊息復活）
-// =======================
 const startTime = Date.now();
 
 // =======================
-// 👉 群組設定
+// 👉 群組
 // =======================
 const sourceGroups = [
   -1003825428908,
@@ -59,15 +52,10 @@ bot.on("message", async (msg) => {
 
     if (!text) return;
 
-    // ===================
-    // 📥 存資料群
-    // ===================
     if (sourceGroups.includes(chatId)) {
 
-      // ❗防舊訊息復活
       if (msg.date * 1000 < startTime) return;
 
-      // ❗防重複
       const { data: exists } = await supabase
         .from("messages")
         .select("id")
@@ -76,28 +64,18 @@ bot.on("message", async (msg) => {
 
       if (exists) return;
 
-      const { error } = await supabase
-        .from("messages")
-        .insert([
-          {
-            chat_id: chatId,
-            message_id: msg.message_id,
-            text: text
-          }
-        ]);
+      await supabase.from("messages").insert([
+        {
+          chat_id: chatId,
+          message_id: msg.message_id,
+          text: text
+        }
+      ]);
 
-      if (error) {
-        console.log("❌ 寫入失敗:", error);
-      } else {
-        console.log("✅ 已寫入:", text.slice(0, 20));
-      }
-
+      console.log("✅ 已寫入:", text.slice(0, 20));
       return;
     }
 
-    // ===================
-    // 🔍 查詢群
-    // ===================
     if (!queryGroups.includes(chatId)) return;
 
     const keyword = text;
@@ -114,10 +92,41 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // ===================
+    // =======================
+    // 🔥 查詢時過濾壞資料
+    // =======================
+    const validResults = [];
+
+    for (let row of data) {
+      try {
+        // 👉 嘗試「靜默驗證」
+        await bot.copyMessage(chatId, row.chat_id, row.message_id, {
+          disable_notification: true
+        });
+
+        validResults.push(row);
+
+      } catch (err) {
+        console.log("🗑 自動清理壞資料:", row.message_id);
+
+        await supabase
+          .from("messages")
+          .delete()
+          .eq("message_id", row.message_id);
+      }
+
+      if (validResults.length >= 10) break;
+    }
+
+    if (validResults.length === 0) {
+      bot.sendMessage(chatId, "❌ 找不到相關資料");
+      return;
+    }
+
+    // =======================
     // 🔘 建按鈕
-    // ===================
-    const keyboard = data.map((row, i) => [
+    // =======================
+    const keyboard = validResults.map((row, i) => [
       {
         text: `${i + 1}. ${getTitle(row.text)}`,
         callback_data: JSON.stringify({
@@ -139,34 +148,17 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 🔥 同步核心（自動清掉被刪訊息）
+// 👉 點擊
 // =======================
 bot.on("callback_query", async (query) => {
   try {
     const data = JSON.parse(query.data);
-    const chatId = query.message.chat.id;
 
-    try {
-      // 👉 嘗試轉發
-      await bot.copyMessage(chatId, data.c, data.m);
-
-    } catch (err) {
-
-      console.log("❌ 訊息不存在 → 刪除DB:", data.m);
-
-      // 👉 自動刪掉資料庫紀錄
-      await supabase
-        .from("messages")
-        .delete()
-        .eq("message_id", data.m);
-
-      await bot.answerCallbackQuery(query.id, {
-        text: "❌ 此資料已被刪除",
-        show_alert: true
-      });
-
-      return;
-    }
+    await bot.copyMessage(
+      query.message.chat.id,
+      data.c,
+      data.m
+    );
 
     await bot.answerCallbackQuery(query.id);
 
@@ -176,11 +168,9 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 🧠 標題處理
-// =======================
 function getTitle(text) {
   if (!text) return "資料";
   return text.split("\n")[0].slice(0, 25);
 }
 
-console.log("🔥 客服系統（完全同步版）已啟動");
+console.log("🔥 客服系統（過濾同步版）已啟動");
