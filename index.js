@@ -8,7 +8,7 @@ const supabase = createClient(
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT（單實例）
+// ===== BOT
 const bot = new TelegramBot(process.env.TOKEN);
 bot.startPolling();
 
@@ -32,7 +32,7 @@ const queryGroups = [
 // =======================
 bot.on("message", async (msg) => {
   try {
-    // ❗防止兩段式（關鍵）
+    // ❗防止兩段式
     if (msg.from.is_bot) return;
 
     const chatId = msg.chat.id;
@@ -59,7 +59,7 @@ bot.on("message", async (msg) => {
 
     const { data } = await supabase
       .from("messages")
-      .select("chat_id, message_id, text")
+      .select("id, chat_id, message_id, text")
       .ilike("text", `%${text}%`)
       .order("id", { ascending: false })
       .limit(20);
@@ -69,8 +69,44 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // ===== 按鈕（不驗證）
-    const keyboard = data.map((row, i) => [
+    // =======================
+    // 🔥 查詢時驗證（完全同步）
+    // =======================
+    const valid = [];
+
+    for (const row of data) {
+      try {
+        const sent = await bot.copyMessage(
+          chatId,
+          row.chat_id,
+          row.message_id,
+          { disable_notification: true }
+        );
+
+        // 👉 刪掉剛剛測試的訊息（避免出現）
+        await bot.deleteMessage(chatId, sent.message_id);
+
+        valid.push(row);
+
+      } catch (err) {
+        console.log("🧹 刪除無效資料:", row.id);
+
+        await supabase
+          .from("messages")
+          .delete()
+          .eq("id", row.id);
+      }
+    }
+
+    if (valid.length === 0) {
+      bot.sendMessage(chatId, "❌ 查無有效資料");
+      return;
+    }
+
+    // =======================
+    // 🔘 按鈕
+    // =======================
+    const keyboard = valid.map((row, i) => [
       {
         text: `${i + 1}. ${getTitle(row.text)}`,
         callback_data: JSON.stringify({
@@ -96,7 +132,7 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 👉 點擊才驗證（穩定版）
+// 👉 點擊顯示
 // =======================
 bot.on("callback_query", async (query) => {
   try {
@@ -111,7 +147,7 @@ bot.on("callback_query", async (query) => {
     await bot.answerCallbackQuery(query.id);
 
   } catch (err) {
-    console.log("🧹 已刪除 → 清DB");
+    console.log("❌ 點擊失敗 → 清DB");
 
     const data = JSON.parse(query.data);
 
@@ -133,4 +169,4 @@ function getTitle(text) {
   return text ? text.split("\n")[0].slice(0, 25) : "資料";
 }
 
-console.log("🔥 最終穩定版（不亂跳）啟動");
+console.log("🔥 完全同步（查詢乾淨版）啟動");
