@@ -4,7 +4,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 // ===== Supabase
 const supabase = createClient(
-  "https://nduirhpyrjrhxnypppj.supabase.co",
+  "https://nduirhpyrjrhxnyppj.supabase.co",
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
