@@ -3,16 +3,7 @@ const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
 // =======================
-// 🔥 保證只啟動一次
-// =======================
-if (global.botStarted) {
-  console.log("⚠️ 已啟動過，略過");
-  process.exit(0);
-}
-global.botStarted = true;
-
-// =======================
-// Supabase（你的正確）
+// Supabase
 // =======================
 const supabase = createClient(
   "https://nduirhpjyrjrhxnypppj.supabase.co",
@@ -20,11 +11,12 @@ const supabase = createClient(
 );
 
 // =======================
-// BOT（單一來源）
-// =======================
+// BOT（單一）
+/**
+ * ❗只用這種方式
+ * 不要 polling: true/false 混用
+ */
 const bot = new TelegramBot(process.env.TOKEN);
-
-// 👉 只用這個（不混用）
 bot.startPolling();
 
 // =======================
@@ -71,51 +63,33 @@ bot.on("message", async (msg) => {
         }
       ]);
 
-      if (error) {
-        console.log("❌ 寫入錯誤:", error);
-      }
+      if (error) console.log("❌ 寫入失敗:", error);
 
       return;
     }
 
     // =======================
-    // 🔍 查詢（只出按鈕）
+    // 🔍 查詢（只顯示按鈕）
     // =======================
     if (!queryGroups.includes(chatId)) return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("messages")
       .select("chat_id, message_id, text")
       .ilike("text", `%${text}%`)
       .order("id", { ascending: false })
       .limit(20);
 
-    if (!data || data.length === 0) {
+    if (error || !data || data.length === 0) {
       bot.sendMessage(chatId, "❌ 查無資料");
       return;
     }
 
-    // =======================
-    // 🔥 過濾已刪訊息
-    // =======================
-    const valid = [];
-
-    for (let row of data) {
-      try {
-        await bot.copyMessage(chatId, row.chat_id, row.message_id, {
-          disable_notification: true
-        });
-        valid.push(row);
-      } catch {}
-    }
-
-    if (valid.length === 0) {
-      bot.sendMessage(chatId, "❌ 查無有效資料");
-      return;
-    }
+    // ❗❗❗重點修正：完全不做 copyMessage
+    const valid = data;
 
     // =======================
-    // 🖤 黑金低調（無符號）
+    // 🖤 黑金低調版（無符號）
     // =======================
     const keyboard = valid.map((row, i) => [
       {
@@ -127,7 +101,7 @@ bot.on("message", async (msg) => {
       }
     ]);
 
-    // ❗❗❗唯一回覆（沒有第二段）
+    // 👉 唯一回覆（只會出這段）
     bot.sendMessage(
       chatId,
       "【📚推薦相關🔎】\n請選擇項目：",
@@ -168,4 +142,4 @@ function getTitle(text) {
   return text ? text.split("\n")[0].slice(0, 25) : "資料";
 }
 
-console.log("🔥 單一BOT・黑金版啟動");
+console.log("🔥 黑金客服系統（最終穩定版）啟動");
