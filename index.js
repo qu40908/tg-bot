@@ -3,7 +3,7 @@ const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
 // =======================
-// ✅ Supabase（用你修正後的）
+// ✅ Supabase（你的正確URL）
 // =======================
 const supabase = createClient(
   "https://nduirhpjyrjrhxnypppj.supabase.co",
@@ -11,13 +11,13 @@ const supabase = createClient(
 );
 
 // =======================
-// ✅ BOT（防 409 關鍵）
+// ✅ BOT（防409衝突）
 // =======================
 const bot = new TelegramBot(process.env.TOKEN, {
   polling: false
 });
 
-// 👉 手動啟動 polling（只會開一次）
+// 👉 手動啟動 polling（只會一個實例）
 bot.startPolling({
   interval: 300,
   params: {
@@ -33,27 +33,24 @@ app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
 // =======================
-// ✅ 啟動時間（防舊資料復活）
+// ✅ 啟動時間（防舊訊息復活）
 // =======================
 const startTime = Date.now();
 
 // =======================
 // 👉 群組設定
 // =======================
-
-// 📌 存資料群
 const sourceGroups = [
   -1003825428908,
   -1003877293059
 ];
 
-// 📌 查詢群
 const queryGroups = [
   -1003874245157
 ];
 
 // =======================
-// 📥 存資料（最穩定版）
+// 📥 存資料
 // =======================
 bot.on("message", async (msg) => {
   try {
@@ -63,14 +60,14 @@ bot.on("message", async (msg) => {
     if (!text) return;
 
     // ===================
-    // 📥 存資料
+    // 📥 存資料群
     // ===================
     if (sourceGroups.includes(chatId)) {
 
-      // ❗防「舊訊息復活」
+      // ❗防舊訊息復活
       if (msg.date * 1000 < startTime) return;
 
-      // ❗防重複（同 message_id）
+      // ❗防重複
       const { data: exists } = await supabase
         .from("messages")
         .select("id")
@@ -99,7 +96,7 @@ bot.on("message", async (msg) => {
     }
 
     // ===================
-    // 🔍 查詢
+    // 🔍 查詢群
     // ===================
     if (!queryGroups.includes(chatId)) return;
 
@@ -118,7 +115,7 @@ bot.on("message", async (msg) => {
     }
 
     // ===================
-    // 🔘 建按鈕（不去重）
+    // 🔘 建按鈕
     // ===================
     const keyboard = data.map((row, i) => [
       {
@@ -142,17 +139,34 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 👉 點擊按鈕（永不過期）
+// 🔥 同步核心（自動清掉被刪訊息）
 // =======================
 bot.on("callback_query", async (query) => {
   try {
     const data = JSON.parse(query.data);
+    const chatId = query.message.chat.id;
 
-    await bot.copyMessage(
-      query.message.chat.id,
-      data.c,
-      data.m
-    );
+    try {
+      // 👉 嘗試轉發
+      await bot.copyMessage(chatId, data.c, data.m);
+
+    } catch (err) {
+
+      console.log("❌ 訊息不存在 → 刪除DB:", data.m);
+
+      // 👉 自動刪掉資料庫紀錄
+      await supabase
+        .from("messages")
+        .delete()
+        .eq("message_id", data.m);
+
+      await bot.answerCallbackQuery(query.id, {
+        text: "❌ 此資料已被刪除",
+        show_alert: true
+      });
+
+      return;
+    }
 
     await bot.answerCallbackQuery(query.id);
 
@@ -169,4 +183,4 @@ function getTitle(text) {
   return text.split("\n")[0].slice(0, 25);
 }
 
-console.log("🔥 客服系統（最終穩定版）已啟動");
+console.log("🔥 客服系統（完全同步版）已啟動");
