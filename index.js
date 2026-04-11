@@ -1,18 +1,16 @@
-process.env.NTBA_FIX_350 = 1; // 🔥 防 409
-
 const TelegramBot = require("node-telegram-bot-api");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
-// ===== Supabase（⚠️ 這裡要確認URL正確）
+// ===== Supabase
 const supabase = createClient(
-  "https://nduirhpyrjrhxnypppj.supabase.co", // ⚠️ 你原本少一個 p
+  "https://nduirhpjyrjrhxnypppj.supabase.co", // ← 確認這行沒打錯！
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT（🔥 改最穩定寫法）
+// ===== BOT（❗關鍵：關掉自動 polling）
 const bot = new TelegramBot(process.env.TOKEN, {
-  polling: true
+  polling: false
 });
 
 // ===== Render 防 timeout
@@ -24,17 +22,19 @@ app.listen(process.env.PORT || 3000);
 // 👉 群組設定
 // =======================
 
+// 📌 資料群（存資料）
 const sourceGroups = [
   -1003825428908,
   -1003877293059
 ];
 
+// 📌 查詢群（使用者查詢）
 const queryGroups = [
   -1003874245157
 ];
 
 // =======================
-// 📥 存資料 + 🔍 查詢
+// 📥 存資料 + 查詢
 // =======================
 bot.on("message", async (msg) => {
   try {
@@ -57,7 +57,7 @@ bot.on("message", async (msg) => {
         }]);
 
       if (error) {
-        console.log("❌ 寫入失敗:", error.message);
+        console.log("❌ 寫入失敗:", error);
       } else {
         console.log("✅ 已寫入:", text.slice(0, 20));
       }
@@ -83,7 +83,7 @@ bot.on("message", async (msg) => {
     }
 
     // ===================
-    // 🔘 按鈕
+    // 🔘 建按鈕
     // ===================
     const keyboard = data.map((row, i) => [{
       text: `${i + 1}. ${getTitle(row.text)}`,
@@ -125,11 +125,28 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 🧠 標題
+// 🧠 標題處理
 // =======================
 function getTitle(text) {
   if (!text) return "資料";
   return text.split("\n")[0].slice(0, 25);
 }
 
+// =======================
+// 🚀 關鍵：手動啟動 polling（單例）
+// =======================
+if (!global.botStarted) {
+  global.botStarted = true;
+
+  bot.startPolling({
+    interval: 300,
+    params: {
+      timeout: 10
+    }
+  });
+
+  console.log("✅ polling 已啟動（單例）");
+}
+
 console.log("🔥 客服系統（最終穩定版）已啟動");
+
