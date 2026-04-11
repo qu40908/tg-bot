@@ -104,7 +104,7 @@ bot.on("message", async (msg) => {
       callback_data: `pick_${i}`
     }]);
 
-    bot.sendMessage(chatId, "👉 請選擇：", {
+    bot.sendMessage(chatId, "👉 為您推薦相關資訊：", {
       reply_markup: {
         inline_keyboard: keyboard
       }
