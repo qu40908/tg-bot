@@ -1,19 +1,18 @@
+process.env.NTBA_FIX_350 = 1; // 🔥 防 409
+
 const TelegramBot = require("node-telegram-bot-api");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
-// ===== Supabase
+// ===== Supabase（⚠️ 這裡要確認URL正確）
 const supabase = createClient(
-  "https://nduirhpyrjrhxnyppj.supabase.co",
+  "https://nduirhpyrjrhxnypppj.supabase.co", // ⚠️ 你原本少一個 p
   "sb_publishable_EJPFZMVmzllECy3TfQU2zQ_0nOl_5iq"
 );
 
-// ===== BOT
+// ===== BOT（🔥 改最穩定寫法）
 const bot = new TelegramBot(process.env.TOKEN, {
-  polling: {
-    autoStart: true,
-    interval: 300,
-  },
+  polling: true
 });
 
 // ===== Render 防 timeout
@@ -25,19 +24,17 @@ app.listen(process.env.PORT || 3000);
 // 👉 群組設定
 // =======================
 
-// 📌 資料群（存資料）
 const sourceGroups = [
   -1003825428908,
   -1003877293059
 ];
 
-// 📌 查詢群（使用者查詢）
 const queryGroups = [
   -1003874245157
 ];
 
 // =======================
-// 📥 存資料（Supabase）
+// 📥 存資料 + 🔍 查詢
 // =======================
 bot.on("message", async (msg) => {
   try {
@@ -46,21 +43,21 @@ bot.on("message", async (msg) => {
 
     if (!text) return;
 
-    // 👉 存資料
+    // ===================
+    // 📥 存資料
+    // ===================
     if (sourceGroups.includes(chatId)) {
 
       const { error } = await supabase
         .from("messages")
-        .insert([
-          {
-            chat_id: chatId,
-            message_id: msg.message_id,
-            text: text
-          }
-        ]);
+        .insert([{
+          chat_id: chatId,
+          message_id: msg.message_id,
+          text: text
+        }]);
 
       if (error) {
-        console.log("❌ 寫入失敗:", error);
+        console.log("❌ 寫入失敗:", error.message);
       } else {
         console.log("✅ 已寫入:", text.slice(0, 20));
       }
@@ -68,12 +65,11 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // 👉 不是查詢群 → 不處理
+    // ===================
+    // 🔍 查詢
+    // ===================
     if (!queryGroups.includes(chatId)) return;
 
-    // =======================
-    // 🔍 查詢（最乾淨版）
-    // =======================
     const { data, error } = await supabase
       .from("messages")
       .select("chat_id, message_id, text")
@@ -86,9 +82,9 @@ bot.on("message", async (msg) => {
       return;
     }
 
-    // =======================
-    // 🔘 建按鈕（不去重）
-    // =======================
+    // ===================
+    // 🔘 按鈕
+    // ===================
     const keyboard = data.map((row, i) => [{
       text: `${i + 1}. ${getTitle(row.text)}`,
       callback_data: JSON.stringify({
@@ -129,7 +125,7 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 🧠 標題處理（顯示第一行）
+// 🧠 標題
 // =======================
 function getTitle(text) {
   if (!text) return "資料";
