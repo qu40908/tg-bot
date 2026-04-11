@@ -10,10 +10,13 @@ const supabase = createClient(
 
 // ===== BOT
 const bot = new TelegramBot(process.env.TOKEN, {
-  polling: true
+  polling: {
+    autoStart: true,
+    interval: 300,
+  },
 });
 
-// ===== Render 保活
+// ===== Render 防 timeout
 const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
@@ -28,118 +31,87 @@ const queryGroups = [
   -1003874245157
 ];
 
-// ===== 暫存
-const userCache = {};
-
 // =======================
-// 主邏輯
+// 📥 存資料（Supabase）
 // =======================
 bot.on("message", async (msg) => {
-  try {
-    const chatId = msg.chat.id;
-    const text = msg.text;
+  const chatId = msg.chat.id;
+  const text = msg.text;
 
-    if (!text) return;
+  if (!text) return;
 
-    // ===================
-    // 📥 存資料（避免重複）
-    // ===================
-    if (sourceGroups.includes(chatId)) {
-      const { data: exist } = await supabase
-        .from("messages")
-        .select("id")
-        .eq("text", text)
-        .limit(1);
-
-      if (!exist || exist.length === 0) {
-        await supabase.from("messages").insert([
-          {
-            chat_id: chatId,
-            message_id: msg.message_id,
-            text: text
-          }
-        ]);
+  if (sourceGroups.includes(chatId)) {
+    await supabase.from("messages").insert([
+      {
+        chat_id: chatId,
+        message_id: msg.message_id,
+        text: text
       }
-      return;
-    }
-
-    // ===================
-    // 🔍 查詢
-    // ===================
-    if (!queryGroups.includes(chatId)) return;
-
-    const keyword = text;
-
-    const { data, error } = await supabase
-      .from("messages")
-      .select("chat_id, message_id, text")
-      .ilike("text", `%${keyword}%`)
-      .order("id", { ascending: false })
-      .limit(20);
-
-    if (error || !data || data.length === 0) {
-      bot.sendMessage(chatId, "❌ 找不到相關資料");
-      return;
-    }
-
-    // ===================
-    // 🔥 去重複（關鍵）
-    // ===================
-    const unique = [];
-    const map = new Set();
-
-    data.forEach(item => {
-      if (!map.has(item.text)) {
-        map.add(item.text);
-        unique.push(item);
-      }
-    });
-
-    // 存暫存
-    userCache[chatId] = unique;
-
-    // 建按鈕
-    const keyboard = unique.map((row, i) => [{
-      text: `${i + 1}. ${getTitle(row.text)}`,
-      callback_data: `pick_${i}`
-    }]);
-
-    bot.sendMessage(chatId, "👉 為您推薦相關資訊：", {
-      reply_markup: {
-        inline_keyboard: keyboard
-      }
-    });
-
-  } catch (err) {
-    console.log("❌ message error:", err);
+    ]);
+    return;
   }
+
+  if (!queryGroups.includes(chatId)) return;
+
+  // =======================
+  // 🔍 查詢
+  // =======================
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .ilike("text", `%${text}%`)
+    .order("id", { ascending: false })
+    .limit(20);
+
+  if (error || !data || data.length === 0) {
+    bot.sendMessage(chatId, "❌ 找不到相關資料");
+    return;
+  }
+
+  // =======================
+  // 🚫 去重（重點）
+  // =======================
+  const uniqueMap = {};
+  const uniqueData = [];
+
+  for (const row of data) {
+    const title = getTitle(row.text);
+
+    if (!uniqueMap[title]) {
+      uniqueMap[title] = true;
+      uniqueData.push(row);
+    }
+  }
+
+  // =======================
+  // 🔘 建按鈕（直接帶資料）
+  // =======================
+  const keyboard = uniqueData.map((row, i) => [{
+    text: `${i + 1}. ${getTitle(row.text)}`,
+    callback_data: JSON.stringify({
+      c: row.chat_id,
+      m: row.message_id
+    })
+  }]);
+
+  bot.sendMessage(chatId, "👉 為您推薦相關：", {
+    reply_markup: {
+      inline_keyboard: keyboard
+    }
+  });
 });
 
 // =======================
-// 點擊按鈕
+// 👉 點擊按鈕（不會過期）
 // =======================
 bot.on("callback_query", async (query) => {
   try {
-    const chatId = query.message.chat.id;
-    const index = parseInt(query.data.split("_")[1]);
+    const data = JSON.parse(query.data);
 
-    const data = userCache[chatId];
-
-    if (!data || !data[index]) {
-      await bot.answerCallbackQuery(query.id, {
-        text: "❌ 資料過期，請重新查詢",
-        show_alert: true
-      });
-      return;
-    }
-
-    const item = data[index];
-
-    // 👉 回原文（含超連結）
     await bot.copyMessage(
-      chatId,
-      item.chat_id,
-      item.message_id
+      query.message.chat.id,
+      data.c,
+      data.m
     );
 
     await bot.answerCallbackQuery(query.id);
@@ -150,11 +122,11 @@ bot.on("callback_query", async (query) => {
 });
 
 // =======================
-// 標題
+// 🧠 標題處理
 // =======================
 function getTitle(text) {
   if (!text) return "資料";
   return text.split("\n")[0].slice(0, 25);
 }
 
-console.log("🔥 Supabase 客服系統（最終版）已啟動");
+console.log("🔥 Supabase 客服系統（最終穩定版）已啟動");
