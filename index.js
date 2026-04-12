@@ -17,26 +17,51 @@ const app = express();
 app.get("/", (req, res) => res.send("Bot is alive"));
 app.listen(process.env.PORT || 3000);
 
-// ===== 群組
+// ===== 群組設定
+// 👉 原本資料群（只留一個）
 const sourceGroups = [
-  -1003825428908,
   -1003877293059
 ];
 
+// 👉 公告頻道（新加）
+const announceChannel = -1003875238311;
+
+// 👉 查詢群
 const queryGroups = [
   -1003874245157
 ];
 
 // =======================
-// 📥 主邏輯
+// 📢 公告頻道（Channel）存資料
 // =======================
-bot.on("message", (msg) => {
-  console.log("📩 來源群:", msg.chat.id);
+bot.on("channel_post", async (msg) => {
+  try {
+    const chatId = msg.chat.id;
+    const text = msg.text;
+
+    if (!text) return;
+    if (chatId !== announceChannel) return;
+
+    console.log("📢 公告來源:", chatId, text);
+
+    await supabase.from("messages").insert([
+      {
+        chat_id: chatId,
+        message_id: msg.message_id,
+        text
+      }
+    ]);
+
+  } catch (err) {
+    console.log("❌ channel error:", err);
+  }
 });
 
+// =======================
+// 📥 一般群組
+// =======================
 bot.on("message", async (msg) => {
   try {
-    // ❗防止兩段式
     if (msg.from.is_bot) return;
 
     const chatId = msg.chat.id;
@@ -44,9 +69,9 @@ bot.on("message", async (msg) => {
 
     if (!text) return;
 
-    console.log("📩 來源群:", msg.chat.id, "內容:", text);
+    console.log("📩 來源群:", chatId, text);
 
-    // ===== 存資料
+    // ===== 存資料（一般資料群）
     if (sourceGroups.includes(chatId)) {
       await supabase.from("messages").insert([
         {
@@ -74,7 +99,7 @@ bot.on("message", async (msg) => {
     }
 
     // =======================
-    // 🔥 查詢時驗證（完全同步）
+    // 🔥 查詢同步驗證（核心）
     // =======================
     const valid = [];
 
@@ -87,13 +112,13 @@ bot.on("message", async (msg) => {
           { disable_notification: true }
         );
 
-        // 👉 刪掉剛剛測試的訊息（避免出現）
+        // 👉 立刻刪掉測試訊息（不顯示內容）
         await bot.deleteMessage(chatId, sent.message_id);
 
         valid.push(row);
 
       } catch (err) {
-        console.log("🧹 刪除無效資料:", row.id);
+        console.log("🧹 清除失效資料:", row.id);
 
         await supabase
           .from("messages")
@@ -108,7 +133,7 @@ bot.on("message", async (msg) => {
     }
 
     // =======================
-    // 🔘 按鈕
+    // 🔘 單一回覆（不兩段式）
     // =======================
     const keyboard = valid.map((row, i) => [
       {
@@ -120,7 +145,7 @@ bot.on("message", async (msg) => {
       }
     ]);
 
-    bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       "【📚推薦相關🔎】",
       {
@@ -136,7 +161,7 @@ bot.on("message", async (msg) => {
 });
 
 // =======================
-// 👉 點擊顯示
+// 👉 點擊顯示內容
 // =======================
 bot.on("callback_query", async (query) => {
   try {
@@ -151,7 +176,7 @@ bot.on("callback_query", async (query) => {
     await bot.answerCallbackQuery(query.id);
 
   } catch (err) {
-    console.log("❌ 點擊失敗 → 清DB");
+    console.log("❌ 點擊失敗 → 自動清DB");
 
     const data = JSON.parse(query.data);
 
@@ -173,4 +198,4 @@ function getTitle(text) {
   return text ? text.split("\n")[0].slice(0, 25) : "資料";
 }
 
-console.log("🔥 完全同步（查詢乾淨版）啟動");
+console.log("🔥 公告頻道 + 完全同步 查詢系統 啟動");
