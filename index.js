@@ -30,9 +30,8 @@ const queryGroups = [
 // =======================
 // 📥 主邏輯
 // =======================
-bot.on("channel_post", (msg) => {
-  console.log("📢 CHANNEL ID:", msg.chat.id);
-  console.log("📢 CHANNEL TITLE:", msg.chat.title);
+bot.on("message", (msg) => {
+  console.log("📩 來源群:", msg.chat.id);
 });
 
 bot.on("message", async (msg) => {
