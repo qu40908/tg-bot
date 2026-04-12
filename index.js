@@ -40,7 +40,7 @@ bot.on("message", async (msg) => {
 
     if (!text) return;
 
-    console.log("📩 收到:", text);
+    console.log("📩 來源群:", msg.chat.id, "內容:", text);
 
     // ===== 存資料
     if (sourceGroups.includes(chatId)) {
